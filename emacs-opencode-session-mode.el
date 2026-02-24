@@ -106,6 +106,9 @@ request completes."
       (opencode-session-mode)
       (setq-local opencode-session--session session)
       (setq-local opencode-session--connection connection)
+      (when opencode-session--connection
+        (setq-local default-directory
+                    (opencode-connection-directory opencode-session--connection)))
       (opencode-session--register-buffer session buffer)
       (when connection
         (opencode-session--ensure-agents connection))
