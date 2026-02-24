@@ -1,107 +1,153 @@
 # AGENTS.md
 
 This repository is a small Emacs Lisp client for OpenCode. Keep changes minimal
-and consistent with existing files (`emacs-opencode.el`, `emacs-opencode-connection.el`,
-`emacs-opencode-client.el`).
+and consistent with existing code.
 
-## Docs and references
-There is a local copy of opencode itself at ~/opencode - you can reference it when needed to discover HTTP endpoint interfaces or look at the existing TUI behavior. Opencode docs are available at https://opencode.ai/docs.
+## Docs and References
+
+- A local copy of OpenCode lives at `~/opencode` — reference it for HTTP
+  endpoint interfaces or TUI behavior.
+- OpenCode docs: https://opencode.ai/docs
+- `ARCHITECTURE.org` describes the high-level design; `TODO.org` tracks the roadmap.
 
 ## Build, Lint, Test
 
-No explicit build, lint, or test scripts were found in the repo (no Makefile,
-package metadata, or test files).
+There is no Makefile or CI. Use these commands manually:
+
+```sh
+# Byte-compile all files (catches undefined variables, missing requires, etc.)
+emacs -Q -L . -batch -f batch-byte-compile *.el
+
+# Byte-compile a single file
+emacs -Q -L . -batch -f batch-byte-compile emacs-opencode-client.el
+
+# Run checkdoc on a single file (docstring style)
+emacs -Q -L . -batch --eval '(checkdoc-file "emacs-opencode-client.el")'
+```
+
+No test framework is set up yet. If adding tests, use ERT and document
+how to run a single test in this section.
+
+`.dir-locals.el` adds the repo root to `load-path` so `require` works
+during interactive development.
 
 ## Cursor / Copilot Rules
 
-No Cursor rules (`.cursor/rules/` or `.cursorrules`) or GitHub Copilot rules
-(`.github/copilot-instructions.md`) were found at the time of writing.
+None found at the time of writing.
+
+## External Dependencies
+
+- **`request`** (MELPA) — the only external Emacs package. Used in the client module.
+- **`curl`** — required on `$PATH` for SSE streaming.
+- Built-ins used: `cl-lib`, `subr-x`, `json`, `project`.
 
 ## Code Style Guidelines
 
 ### Formatting
 
-- Use Emacs Lisp conventions: 2-space indentation, align parens as per `lisp-mode`.
-- Keep lines readable; wrap docstrings and long forms around ~80–100 columns.
-- Prefer lexical binding; existing files use `-*- lexical-binding: t; -*-`.
-- Use standard file headers and `provide`/`ends here` trailer comments.
+- Lexical binding in every file: `-*- lexical-binding: t; -*-`.
+- Standard file header, `(provide '...)`, and `;;; ... ends here` trailer.
+- 2-space indentation (Emacs Lisp default). Wrap around 80–100 columns.
 
 ### Naming
 
-- Prefix public symbols with `opencode-` and internal helpers with `opencode--`.
-- Use full, descriptive names (`opencode-connection-start`, not abbreviations).
-- Keep buffer names consistent with existing patterns (e.g., ` *opencode-server<...>*`).
-- File names should be prefixed with `emacs-opencode-`.
+- Public symbols: `opencode-` prefix (e.g., `opencode-run-server`).
+- Internal helpers: double-dash prefix scoped to the module
+  (e.g., `opencode--normalize-directory`, `opencode-session--render-message`).
+- Buffer names: space-prefixed for hidden buffers (` *opencode-server<...>*`),
+  user-visible buffers use `*OpenCode: <title>*`.
+- Files: `emacs-opencode-<module>.el`.
 
 ### Imports and Requires
 
-- Use `require` at top-level, grouped by built-ins then project files.
-- Prefer `cl-lib` for Common Lisp helpers and `subr-x` for `when-let`, `string-*`.
-- Avoid `eval-when-compile` unless compile-time macros are needed.
+- `require` at top-level, grouped: built-ins first, then project modules.
+- Prefer `cl-lib` for CL helpers and `subr-x` for `when-let`, `string-*`.
+- Use `declare-function` for forward references that would cause circular
+  `require` chains — this is a key pattern in the session sub-modules.
 
 ### Docstrings
 
 - Provide docstrings for all public functions, defcustoms, and defvars.
-- First line should be a complete sentence ending with a period.
-- Use ALL CAPS for argument names in docstrings (e.g., DIRECTORY, CONNECTION).
+- First line: a complete sentence ending with a period.
+- Argument names in ALL CAPS (e.g., CONNECTION, DIRECTORY).
 
 ### Types and Data
 
-- Favor `cl-defstruct` for structured state (see `opencode-connection`).
-- Prefer alists and hash tables when matching existing patterns.
-- Use `defcustom` for user-configurable options and `defvar` for internal state.
+- Use `cl-defstruct` with explicit `:constructor` for structured state
+  (e.g., `opencode-connection-create`, `opencode-message-create`).
+- JSON data from the server arrives as alists; access with `alist-get`.
+- `defcustom` for user options, `defvar` for global state,
+  `defvar-local` for per-buffer session state.
+
+### Async and Callbacks
+
+- All server communication is async and callback-based.
+- API functions take `:success` and `:error` keyword callbacks:
+  ```elisp
+  (opencode-client-sessions conn
+    :success (lambda (&rest args)
+               (let ((data (plist-get args :data))) ...))
+    :error (lambda (&rest _args)
+             (error "Failed")))
+  ```
+- All HTTP calls go through `opencode-request` to centralize auth/timeout.
+- Use `opencode-connection-base-url` to build URLs; never hardcode base URLs.
 
 ### Error Handling
 
-- Use `error` for fatal user-visible failures (consistent with current code).
-- Guard optional data with `when-let`/`if-let` or explicit `unless` checks.
-- Clean up processes/buffers on failure when appropriate.
-- Keep server interactions defensive: timeouts, health checks, and graceful shutdown.
+- `error` for fatal user-visible failures.
+- `condition-case` for recoverable errors (port binding, JSON parse, user quit).
+- Guard optional data with `when-let`/`if-let`.
+- Clean up processes and buffers on failure.
 
-### Functions and Control Flow
+### Buffers and Rendering
 
-- Keep functions focused; prefer small helpers like `opencode--normalize-directory`.
-- Use callbacks for async request handling (`:success`/`:error` on `request`).
-- Avoid global mutable state outside the `opencode--connections` registry.
-
-### Networking
-
-- All HTTP calls should go through `opencode-request` to centralize auth/timeout.
-- Use `opencode-connection-base-url` to build URLs; avoid manual base URL strings.
-
-### Processes and Buffers
-
-- Keep process output in dedicated buffers; do not mix with user UI buffers.
-- Always check `buffer-live-p` before modifying buffers from a process filter.
-- When stopping a process, delete it and clean up its buffer (as in
-  `opencode-connection-stop`).
+- Process output goes in dedicated hidden buffers; never mix with UI buffers.
+- Always check `buffer-live-p` before modifying a buffer from a callback or
+  process filter. Use `with-current-buffer` to operate on a specific buffer.
+- Messages use marker-based regions (`start-marker`/`end-marker`); updates
+  replace text between markers rather than re-rendering the whole buffer.
+- Let-bind `inhibit-read-only` when modifying read-only rendered regions.
 
 ### User Interaction
 
-- Provide interactive commands with `;;;###autoload` when appropriate.
-- For interactive args, use `read-directory-name` and `completing-read` patterns
-  used in `emacs-opencode.el`.
-- Use `message` for status updates; avoid noisy logging in normal flow.
+- Mark interactive commands with `;;;###autoload`.
+- Use `read-directory-name` and `completing-read` for interactive arguments.
+- Use `message` for status updates; keep normal flow quiet.
 
 ### Compatibility
 
-- Target a vanilla Emacs environment (`emacs -Q` should work if dependencies are
-  installed). Avoid heavy dependencies and keep `require` list minimal.
+- Target vanilla Emacs 29+ (`emacs -Q` should work with deps installed).
+- Keep the dependency list minimal.
 
-## Project Structure Notes
+## Project Structure
 
-- `emacs-opencode.el`: entry points, connection registry, commands.
-- `emacs-opencode-connection.el`: server process lifecycle, connection struct.
-- `emacs-opencode-client.el`: HTTP request wrapper and API calls.
-- `ARCHITECTURE.org` and `TODO.org` describe planned workflows and roadmap.
+The codebase is organized in layers:
+
+- **Entry and commands** — top-level interactive commands and the connection
+  registry (directory → connection hash-table).
+- **Connection lifecycle** — server process spawn, health check, port allocation,
+  shutdown, and the `opencode-connection` struct.
+- **HTTP client** — central `opencode-request` method plus per-endpoint API
+  wrappers using `cl-defmethod` dispatching on the connection type.
+- **SSE streaming** — curl-based SSE client with a stateful line parser, handler
+  registry, and `opencode-sse-define-handler` macro for event dispatch.
+- **Session data models** — pure `cl-defstruct` definitions for sessions,
+  messages, and message parts. No logic or side effects.
+- **Session UI** — a `define-derived-mode` major mode with marker-delimited
+  input area, incremental message rendering, header-line with spinner, agent/model
+  selection, completion-at-point, and SSE event handlers.
+
+Circular dependencies between session sub-modules are broken by a shared
+variables module (`emacs-opencode-session-vars`) and `declare-function`.
 
 ## Change Checklist
 
 - Update or add docstrings for new public APIs.
-- Use existing naming and registry patterns.
+- Follow existing naming and registry patterns.
 - Keep errors user-friendly and fail fast on invalid state.
-- Avoid adding new files unless required by the task.
-- If adding tests, document how to run a single test.
+- Prefer editing existing files over adding new modules.
+- Byte-compile to catch issues: `emacs -Q -L . -batch -f batch-byte-compile *.el`
 
 ## Notes for Agents
 
