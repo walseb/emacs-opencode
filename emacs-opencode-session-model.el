@@ -12,6 +12,7 @@
 (declare-function opencode-session--session-used-models "emacs-opencode-session-header")
 (declare-function opencode-session--maybe-start-spinner "emacs-opencode-session-header")
 (declare-function opencode-session--maybe-stop-spinner "emacs-opencode-session-header")
+(declare-function opencode-session--ensure-connection "emacs-opencode-session-mode" (callback))
 
 (defcustom opencode-session-default-agent "plan"
   "Default agent name for new OpenCode sessions."
@@ -112,36 +113,40 @@ Most recently selected first.")
   (opencode-session--render-header)
   (message "OpenCode agent: %s" agent))
 
-(defun opencode-session-select-agent (agent)
-  "Select AGENT for the current session buffer."
-  (interactive
-   (progn
-     (unless opencode-session--connection
-       (error "OpenCode session is not connected"))
-     (opencode-session--ensure-agents opencode-session--connection)
-     (let ((agents (opencode-session--available-agents)))
-       (unless agents
-         (error "OpenCode agents not available"))
-       (list (completing-read "OpenCode agent: " agents nil t
-                              (or opencode-session--agent (car agents)))))))
-  (let* ((agents (opencode-session--available-agents))
-         (index (and agents (cl-position agent agents :test #'string=))))
-    (if (and index agents)
-        (opencode-session--set-agent agent index)
-      (message "OpenCode: unknown agent %s" agent))))
+(defun opencode-session-select-agent ()
+  "Select an agent for the current session buffer."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (opencode-session--ensure-connection
+     (lambda (connection)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (opencode-session--ensure-agents connection)
+           (let ((agents (opencode-session--available-agents)))
+             (unless agents
+               (error "OpenCode agents not available"))
+             (let* ((agent (completing-read "OpenCode agent: " agents nil t
+                                            (or opencode-session--agent (car agents))))
+                    (index (cl-position agent agents :test #'string=)))
+               (if (and index agents)
+                   (opencode-session--set-agent agent index)
+                 (message "OpenCode: unknown agent %s" agent))))))))))
 
 (defun opencode-session--cycle-agent (step)
   "Cycle the current agent by STEP positions."
-  (unless opencode-session--connection
-    (error "OpenCode session is not connected"))
-  (opencode-session--ensure-agents opencode-session--connection)
-  (let ((agents (opencode-session--available-agents)))
-    (unless agents
-      (error "OpenCode agents not available"))
-    (let* ((count (length agents))
-           (current (or opencode-session--agent-index 0))
-           (next (mod (+ current step) count)))
-      (opencode-session--set-agent (nth next agents) next))))
+  (let ((buffer (current-buffer)))
+    (opencode-session--ensure-connection
+     (lambda (connection)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (opencode-session--ensure-agents connection)
+           (let ((agents (opencode-session--available-agents)))
+             (unless agents
+               (error "OpenCode agents not available"))
+             (let* ((count (length agents))
+                    (current (or opencode-session--agent-index 0))
+                    (next (mod (+ current step) count)))
+               (opencode-session--set-agent (nth next agents) next)))))))))
 
 (defun opencode-session-next-agent ()
   "Select the next available agent."
@@ -156,9 +161,12 @@ Most recently selected first.")
 (defun opencode-session-refresh-agents ()
   "Refresh the available agents list for the session."
   (interactive)
-  (unless opencode-session--connection
-    (error "OpenCode session is not connected"))
-  (opencode-session--refresh-agents opencode-session--connection))
+  (let ((buffer (current-buffer)))
+    (opencode-session--ensure-connection
+     (lambda (connection)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (opencode-session--refresh-agents connection)))))))
 
 ;;; Provider and model selection
 
@@ -356,33 +364,37 @@ Update recent models list, buffer state, and header."
 (defun opencode-session-select-model ()
   "Select a provider and model for the current session buffer."
   (interactive)
-  (unless opencode-session--connection
-    (error "OpenCode session is not connected"))
-  (opencode-session--ensure-providers opencode-session--connection)
-  (let ((data (opencode-session--provider-model-completion-data)))
-    (unless (car data)
-      (error "OpenCode providers not available"))
-    (let* ((choices (car data))
-           (lookup (cdr data))
-           (completion-extra-properties
-            '(:display-sort-function identity :cycle-sort-function identity))
-           (selection (completing-read "OpenCode model: " choices nil t))
-           (candidate (gethash selection lookup)))
-      (unless candidate
-        (error "OpenCode: unknown model selection"))
-      (let ((provider-id (plist-get candidate :provider-id))
-            (model-id (plist-get candidate :model-id))
-            (connected-p (plist-get candidate :connected-p)))
-        (if connected-p
-            (opencode-session--apply-model-selection provider-id model-id)
-          (let ((buffer (current-buffer)))
-            (opencode-session--connect-provider
-             provider-id
-             (lambda (&rest _ignored)
-               (when (buffer-live-p buffer)
-                 (with-current-buffer buffer
-                   (opencode-session--apply-model-selection
-                    provider-id model-id)))))))))))
+  (let ((buffer (current-buffer)))
+    (opencode-session--ensure-connection
+     (lambda (connection)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (opencode-session--ensure-providers connection)
+           (let ((data (opencode-session--provider-model-completion-data)))
+             (unless (car data)
+               (error "OpenCode providers not available"))
+             (let* ((choices (car data))
+                    (lookup (cdr data))
+                    (completion-extra-properties
+                     '(:display-sort-function identity :cycle-sort-function identity))
+                    (selection (completing-read "OpenCode model: " choices nil t))
+                    (candidate (gethash selection lookup)))
+               (unless candidate
+                 (error "OpenCode: unknown model selection"))
+               (let ((provider-id (plist-get candidate :provider-id))
+                     (model-id (plist-get candidate :model-id))
+                     (connected-p (plist-get candidate :connected-p)))
+                 (if connected-p
+                     (opencode-session--apply-model-selection provider-id model-id)
+                    (opencode-session--connect-provider
+                     provider-id
+                     (lambda (&rest _ignored)
+                       (when (buffer-live-p buffer)
+                         (with-current-buffer buffer
+                           (opencode-session--apply-model-selection
+                            provider-id model-id)))))))))))))))
+
+
 
 (defalias 'opencode-session-connect-provider #'opencode-session-select-model
   "Select a provider and model for the current session buffer.")
@@ -479,51 +491,56 @@ ON-SUCCESS is called when providers are loaded."
     (error "Not in an OpenCode session buffer"))
   (opencode-session--set-variant nil nil))
 
-(defun opencode-session-select-variant (variant)
-  "Select model VARIANT for the current session buffer."
-  (interactive
-   (progn
-     (unless opencode-session--connection
-       (error "OpenCode session is not connected"))
-     (opencode-session--ensure-providers opencode-session--connection)
-     (unless (opencode-session--active-model)
-       (error "Select a model first"))
-     (let* ((variants (or (opencode-session--available-variants) nil))
-            (choices (cons opencode-session--no-variant-label variants))
-            (initial (or opencode-session--variant
-                         opencode-session-default-variant
-                         opencode-session--no-variant-label)))
-       (list (completing-read "OpenCode variant: " choices nil t nil nil initial)))))
-  (if (or (null variant)
-          (string= variant opencode-session--no-variant-label))
-      (opencode-session-clear-variant)
-    (let* ((variants (opencode-session--available-variants))
-           (index (and variants
-                       (cl-position variant variants :test #'string=))))
-      (if (and variants index)
-          (opencode-session--set-variant variant index)
-        (message "OpenCode: unknown variant %s" variant)))))
+(defun opencode-session-select-variant ()
+  "Select a model variant for the current session buffer."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (opencode-session--ensure-connection
+     (lambda (connection)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (opencode-session--ensure-providers connection)
+           (unless (opencode-session--active-model)
+             (error "Select a model first"))
+           (let* ((variants (or (opencode-session--available-variants) nil))
+                  (choices (cons opencode-session--no-variant-label variants))
+                  (initial (or opencode-session--variant
+                               opencode-session-default-variant
+                               opencode-session--no-variant-label))
+                  (variant (completing-read "OpenCode variant: " choices nil t nil nil initial)))
+             (if (or (null variant)
+                     (string= variant opencode-session--no-variant-label))
+                 (opencode-session-clear-variant)
+               (let* ((available (opencode-session--available-variants))
+                      (index (and available
+                                  (cl-position variant available :test #'string=))))
+                 (if (and available index)
+                     (opencode-session--set-variant variant index)
+                   (message "OpenCode: unknown variant %s" variant)))))))))))
 
 (defun opencode-session--cycle-variant (step)
   "Cycle the current model variant by STEP positions."
-  (unless opencode-session--connection
-    (error "OpenCode session is not connected"))
-  (opencode-session--ensure-providers opencode-session--connection)
-  (unless (opencode-session--active-model)
-    (error "Select a model first"))
-  (let* ((variants (or (opencode-session--available-variants) nil))
-         (cycle-values (cons nil variants))
-         (count (length cycle-values))
-         (current (or (and opencode-session--variant
-                           (let ((index (cl-position opencode-session--variant variants
-                                                     :test #'string=)))
-                             (and index (1+ index))))
-                      0))
-         (next (mod (+ current step) count))
-         (next-variant (nth next cycle-values)))
-    (if next-variant
-        (opencode-session--set-variant next-variant (1- next))
-      (opencode-session-clear-variant))))
+  (let ((buffer (current-buffer)))
+    (opencode-session--ensure-connection
+     (lambda (connection)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (opencode-session--ensure-providers connection)
+           (unless (opencode-session--active-model)
+             (error "Select a model first"))
+           (let* ((variants (or (opencode-session--available-variants) nil))
+                  (cycle-values (cons nil variants))
+                  (count (length cycle-values))
+                  (current (or (and opencode-session--variant
+                                    (let ((index (cl-position opencode-session--variant variants
+                                                              :test #'string=)))
+                                      (and index (1+ index))))
+                               0))
+                  (next (mod (+ current step) count))
+                  (next-variant (nth next cycle-values)))
+             (if next-variant
+                 (opencode-session--set-variant next-variant (1- next))
+               (opencode-session-clear-variant)))))))))
 
 (defun opencode-session-next-variant ()
   "Select the next variant (including none) for the current model."

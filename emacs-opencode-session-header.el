@@ -234,15 +234,16 @@ Most recently used first."
 (defun opencode-session--model-context-limit (provider-id model-id)
   "Return the context limit for PROVIDER-ID and MODEL-ID."
   (when (and opencode-session--connection provider-id model-id)
-    (when-let* ((providers (opencode-connection-providers opencode-session--connection))
-                (provider (cl-find provider-id providers
-                                   :key (lambda (item) (alist-get 'id item))
-                                   :test #'string=))
-                (models (alist-get 'models provider))
-                (model (alist-get model-id models nil nil #'string=))
-                (limit (alist-get 'limit model))
-                (context (alist-get 'context limit)))
-      context)))
+    (let ((providers (opencode-connection-providers opencode-session--connection)))
+      (when (and providers (listp providers))
+        (when-let* ((provider (cl-find provider-id providers
+                                       :key (lambda (item) (alist-get 'id item))
+                                       :test #'string=))
+                    (models (alist-get 'models provider))
+                    (model (alist-get model-id models nil nil #'string=))
+                    (limit (alist-get 'limit model))
+                    (context (alist-get 'context limit)))
+          context)))))
 
 (defun opencode-session--header-status-label (status)
   "Return STATUS label for the header line."

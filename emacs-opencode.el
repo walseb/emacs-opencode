@@ -246,12 +246,16 @@ once the server is ready."
   (interactive (list (opencode--read-directory "OpenCode directory: ")))
   (let* ((normalized (opencode--normalize-directory directory))
          (existing (opencode--get-connection normalized)))
-    (if existing
+    (if (and existing (opencode-connection-alive-p existing))
         (progn
           (message "OpenCode already running for %s" normalized)
           (when on-ready
             (funcall on-ready existing))
           existing)
+      (when existing
+        (opencode-sse-close existing)
+        (opencode-connection-stop existing)
+        (opencode--unregister-connection normalized))
       (let* ((connection (opencode-connection-create-for-directory normalized))
              (timeout (run-at-time opencode-ready-timeout nil
                                    #'opencode--ready-timeout normalized connection)))

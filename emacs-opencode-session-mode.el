@@ -12,6 +12,8 @@
 (require 'emacs-opencode-session)
 (require 'emacs-opencode-client)
 
+(declare-function opencode-run-server "emacs-opencode" (directory &optional on-ready))
+
 (defcustom opencode-session-input-prompt "❯ "
   "Prompt string shown before the session input area."
   :type 'string
@@ -115,6 +117,37 @@ request completes."
     (pop-to-buffer buffer)
     buffer))
 
+;;; Connection management
+
+(defun opencode-session--ensure-connection (callback)
+  "Ensure the current session buffer has a live connection.
+
+When the connection is alive, call CALLBACK immediately with the
+connection.  When the connection is dead or missing, start a new
+server for the session directory, update the buffer-local
+connection, and then call CALLBACK with the new connection."
+  (if (and opencode-session--connection
+           (opencode-connection-alive-p opencode-session--connection))
+      (funcall callback opencode-session--connection)
+    (let ((directory (or (and opencode-session--session
+                              (opencode-session-directory opencode-session--session))
+                         (and opencode-session--connection
+                              (opencode-connection-directory
+                               opencode-session--connection))))
+          (buffer (current-buffer)))
+      (unless directory
+        (error "OpenCode session has no associated directory"))
+      (message "OpenCode: reconnecting...")
+      (opencode-run-server
+       directory
+       (lambda (connection)
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (setq-local opencode-session--connection connection)
+             (opencode-session--ensure-agents connection)
+             (message "OpenCode: reconnected")
+             (funcall callback connection))))))))
+
 ;;; Input handling
 
 ;;;###autoload
@@ -137,17 +170,22 @@ request completes."
   (let ((input (opencode-session--current-input)))
     (if (string-empty-p (string-trim input))
         (message "OpenCode input is empty")
-      (unless (and opencode-session--connection opencode-session--session)
+      (unless opencode-session--session
         (error "OpenCode session is not connected"))
-      (if (string-prefix-p "/" input)
-          (opencode-session--maybe-send-command opencode-session--connection
+      (let ((buffer (current-buffer)))
+        (opencode-session--ensure-connection
+         (lambda (connection)
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (if (string-prefix-p "/" input)
+                   (opencode-session--maybe-send-command connection
+                                                         opencode-session--session
+                                                         input)
+                 (opencode-session--send-input connection
                                                 opencode-session--session
                                                 input)
-        (opencode-session--send-input opencode-session--connection
-                                      opencode-session--session
-                                      input)
-        (opencode-session--clear-input)
-        (message "OpenCode message submitted")))))
+                 (opencode-session--clear-input)
+                 (message "OpenCode message submitted"))))))))))
 
 ;;;###autoload
 (defun opencode-command ()
@@ -155,40 +193,44 @@ request completes."
   (interactive)
   (unless (derived-mode-p 'opencode-session-mode)
     (error "Not in an OpenCode session buffer"))
-  (unless (and opencode-session--connection opencode-session--session)
+  (unless opencode-session--session
     (error "OpenCode session is not connected"))
-  (let ((connection opencode-session--connection)
-        (session-id (opencode-session-id opencode-session--session))
-        (agent opencode-session--agent)
-        (model (opencode-session--selected-model-string))
-        (variant opencode-session--variant))
-    (opencode-client-commands
-     connection
-     :success (lambda (&rest args)
-                (let* ((data (plist-get args :data))
-                       (items (opencode-session--command-items data))
-                       (names (opencode-session--command-names items)))
-                  (unless names
-                    (error "No OpenCode commands available"))
-                  (let* ((command (completing-read "OpenCode command: " names nil t))
-                         (arguments (read-from-minibuffer
-                                     "OpenCode command args (optional): "
-                                     nil nil nil
-                                     'opencode-command-arguments-history)))
-                    (opencode-client-session-command
-                     connection
-                     session-id
-                     command
-                     arguments
-                     :agent agent
-                     :variant variant
-                     :model model
-                     :success (lambda (&rest _args)
-                                (message "OpenCode command queued"))
-                     :error (lambda (&rest _args)
-                              (message "OpenCode: failed to send command"))))))
-     :error (lambda (&rest _args)
-              (error "Failed to fetch OpenCode commands")))))
+  (let ((buffer (current-buffer)))
+    (opencode-session--ensure-connection
+     (lambda (connection)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (let ((session-id (opencode-session-id opencode-session--session))
+                 (agent opencode-session--agent)
+                 (model (opencode-session--selected-model-string))
+                 (variant opencode-session--variant))
+             (opencode-client-commands
+              connection
+              :success (lambda (&rest args)
+                         (let* ((data (plist-get args :data))
+                                (items (opencode-session--command-items data))
+                                (names (opencode-session--command-names items)))
+                           (unless names
+                             (error "No OpenCode commands available"))
+                           (let* ((command (completing-read "OpenCode command: " names nil t))
+                                  (arguments (read-from-minibuffer
+                                              "OpenCode command args (optional): "
+                                              nil nil nil
+                                              'opencode-command-arguments-history)))
+                             (opencode-client-session-command
+                              connection
+                              session-id
+                              command
+                              arguments
+                              :agent agent
+                              :variant variant
+                              :model model
+                              :success (lambda (&rest _args)
+                                         (message "OpenCode command queued"))
+                              :error (lambda (&rest _args)
+                                       (message "OpenCode: failed to send command"))))))
+              :error (lambda (&rest _args)
+                       (error "Failed to fetch OpenCode commands"))))))))))
 
 (defun opencode-session-self-insert (n)
   "Insert N characters into the session input area."
@@ -211,18 +253,23 @@ request completes."
 (defun opencode-session-interrupt ()
   "Interrupt the active prompt for the current session."
   (interactive)
-  (unless (and opencode-session--connection opencode-session--session)
+  (unless opencode-session--session
     (error "OpenCode session is not connected"))
-  (let ((session-id (opencode-session-id opencode-session--session)))
-    (unless session-id
-      (error "OpenCode session ID is missing"))
-    (opencode-client-session-abort
-     opencode-session--connection
-     session-id
-     :success (lambda (&rest _args)
-                (message "OpenCode: interrupt requested"))
-     :error (lambda (&rest _args)
-              (message "OpenCode: failed to interrupt session")))))
+  (let ((buffer (current-buffer)))
+    (opencode-session--ensure-connection
+     (lambda (connection)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (let ((session-id (opencode-session-id opencode-session--session)))
+             (unless session-id
+               (error "OpenCode session ID is missing"))
+             (opencode-client-session-abort
+              connection
+              session-id
+              :success (lambda (&rest _args)
+                         (message "OpenCode: interrupt requested"))
+              :error (lambda (&rest _args)
+                       (message "OpenCode: failed to interrupt session"))))))))))
 
 ;;; Input area management
 
