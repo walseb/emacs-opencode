@@ -355,7 +355,7 @@ line number metadata. Returns nil when no context can be collected."
     (when context-with-point
       (if file
           (format "File: %s\nLines: %d-%d (point %d)\n\nNote: %s marks the point.\n\n%s"
-                  (file-name-nondirectory file)
+                  (file-truename file)
                   start-line
                   end-line
                   file-line
