@@ -5,6 +5,7 @@
 (require 'emacs-opencode-session-vars)
 (require 'emacs-opencode-session-render)
 (require 'emacs-opencode-session-header)
+(require 'emacs-opencode-session-fontify)
 (require 'emacs-opencode-session-model)
 (require 'emacs-opencode-session-handlers)
 (require 'emacs-opencode-connection)
@@ -80,6 +81,8 @@ Each function receives SESSION and INPUT as arguments.")
       (kbd "TAB") #'opencode-session-next-agent
       (kbd "S-TAB") #'opencode-session-previous-agent
       (kbd "<backtab>") #'opencode-session-previous-agent))
+  (setq-local font-lock-defaults '(opencode-session--font-lock-keywords t))
+  (setq-local font-lock-multiline t)
   (setq-local buffer-read-only nil)
   (setq-local opencode-session--messages nil)
   (setq-local opencode-session--agent nil)

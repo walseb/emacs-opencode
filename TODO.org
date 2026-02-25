@@ -22,7 +22,10 @@ E.g. "OpenCode wants to rg foobar .*" or "OpenCode wants to foo/bar/baz.txt". Wh
 - already implemented: we now only JSON-parse events with registered handlers
 - there is probably still more room to improve here
 * TODO Add newline before "block level" message parts if they are the first part of the message and there isn't a blank line above
-* TODO Font lock in session buffers
+* TODO Render markdown tables with aligned columns
+Rewrite table text at render time: detect consecutive `|...|` lines, measure max column widths, and pad cells.
+* DONE Font lock in session buffers
+CLOSED: [2026-02-25 Tue]
 Should syntax highlight markdown and display diffs from the patch tool with diff syntax highlighting.
 * DONE Add support for managing LLM providers/connections
 CLOSED: [2026-02-18 Wed 17:37]

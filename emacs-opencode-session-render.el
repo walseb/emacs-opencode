@@ -5,6 +5,7 @@
 (require 'emacs-opencode-session-vars)
 (require 'emacs-opencode-message)
 (require 'emacs-opencode-connection)
+(require 'emacs-opencode-session-fontify)
 
 (defcustom opencode-session-show-reasoning nil
   "When non-nil, display reasoning/thinking blocks in the session buffer."
@@ -85,11 +86,13 @@
         (opencode-session--ensure-input-prompt)
         (opencode-session--apply-message-properties start (point) face message)))))
 
-(defun opencode-session--apply-message-properties (start end face message)
-  "Apply message properties from START to END with FACE for MESSAGE."
-  (let ((properties '(read-only t front-sticky t rear-nonsticky t)))
-    (add-text-properties start end (if face (append properties `(face ,face)) properties))
-    (opencode-session--apply-user-prefix message start end)))
+(defun opencode-session--apply-message-properties (start end _face message)
+  "Apply read-only properties from START to END for MESSAGE.
+Individual parts carry their own `face' and `opencode-part-type'
+properties set during rendering; this function only adds structural
+properties and the user prefix indicator."
+  (add-text-properties start end '(read-only t front-sticky t rear-nonsticky t))
+  (opencode-session--apply-user-prefix message start end))
 
 (defun opencode-session--apply-user-prefix (message start end)
   "Apply a line indicator for user MESSAGE between START and END."
@@ -150,15 +153,16 @@
       (let ((text (or (opencode-message-part-text part) ""))
             (synthetic (opencode-message-part-synthetic part))
             (ignored (opencode-message-part-ignored part))
-            (face (opencode-session--role-face message)))
+            (role (opencode-message-role message)))
         (unless (or synthetic ignored (string-empty-p (string-trim text)))
-          (propertize text 'face face))))
+          (let ((ptype (if (string= role "user") "user-text" "assistant-text")))
+            (propertize text 'opencode-part-type ptype)))))
      ((string= part-type "reasoning")
       (when opencode-session-show-reasoning
         (let ((text (or (opencode-message-part-text part) "")))
           (unless (string-empty-p (string-trim text))
             (propertize (concat "Thinking:\n" text)
-                        'face 'opencode-session-reasoning-face)))))
+                        'opencode-part-type "reasoning")))))
      ((string= part-type "tool")
       (opencode-session--tool-part-line part))
      (t nil))))
@@ -172,13 +176,22 @@
          (status (or (alist-get 'status state) "pending"))
          (text (opencode-session--tool-summary tool input metadata status state))
          (error-line (opencode-session--tool-error-line status state))
-         (extra (opencode-session--tool-extra-block tool input metadata)))
+         (extra (opencode-session--tool-extra-block tool input metadata))
+         (is-diff (and extra
+                       (not (string-empty-p (string-trim extra)))
+                       (member tool '("edit" "apply_patch")))))
     (setq text (opencode-session--tool-attach-status text status))
     (when error-line
       (setq text (concat text "\n" error-line)))
-    (when (and extra (not (string-empty-p (string-trim extra))))
-      (setq text (concat text "\n" extra)))
-    (propertize text 'face 'opencode-session-tool-face)))
+    (if is-diff
+        ;; Diff extra block: tool summary tagged as tool, diff tagged for font-lock
+        (concat (propertize text 'opencode-part-type "tool")
+                "\n"
+                (propertize extra 'opencode-part-type "diff"))
+      ;; Non-diff extra: everything tagged as tool
+      (when (and extra (not (string-empty-p (string-trim extra))))
+        (setq text (concat text "\n" extra)))
+      (propertize text 'opencode-part-type "tool"))))
 
 (defun opencode-session--tool-attach-status (text status)
   "Append STATUS to the first line of TEXT when missing."
