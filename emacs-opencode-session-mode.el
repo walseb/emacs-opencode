@@ -75,8 +75,8 @@ Each function receives SESSION and INPUT as arguments.")
   "Major mode for OpenCode session buffers."
   (use-local-map opencode-session-mode-map)
   (when (and (bound-and-true-p evil-mode)
-             (fboundp 'evil-define-key))
-    (evil-define-key '(normal insert) (current-local-map)
+             (fboundp 'evil-define-key*))
+    (evil-define-key* '(normal insert) (current-local-map)
       (kbd "TAB") #'opencode-session-next-agent
       (kbd "S-TAB") #'opencode-session-previous-agent
       (kbd "<backtab>") #'opencode-session-previous-agent))
