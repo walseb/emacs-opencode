@@ -14,15 +14,19 @@ and consistent with existing code.
 
 There is no Makefile or CI. Use these commands manually:
 
+Because `emacs -Q` skips user configuration, external dependencies
+(currently just `request`, installed via `straight.el`) must be added to
+the load path explicitly.
+
 ```sh
 # Byte-compile all files (catches undefined variables, missing requires, etc.)
-emacs -Q -L . -batch -f batch-byte-compile *.el
+emacs -Q -L . -L ~/.emacs.d/straight/build/request -batch -f batch-byte-compile *.el
 
 # Byte-compile a single file
-emacs -Q -L . -batch -f batch-byte-compile emacs-opencode-client.el
+emacs -Q -L . -L ~/.emacs.d/straight/build/request -batch -f batch-byte-compile emacs-opencode-client.el
 
 # Run checkdoc on a single file (docstring style)
-emacs -Q -L . -batch --eval '(checkdoc-file "emacs-opencode-client.el")'
+emacs -Q -L . -L ~/.emacs.d/straight/build/request -batch --eval '(checkdoc-file "emacs-opencode-client.el")'
 ```
 
 No test framework is set up yet. If adding tests, use ERT and document
@@ -147,7 +151,7 @@ variables module (`emacs-opencode-session-vars`) and `declare-function`.
 - Follow existing naming and registry patterns.
 - Keep errors user-friendly and fail fast on invalid state.
 - Prefer editing existing files over adding new modules.
-- Byte-compile to catch issues: `emacs -Q -L . -batch -f batch-byte-compile *.el`
+- Byte-compile to catch issues: `emacs -Q -L . -L ~/.emacs.d/straight/build/request -batch -f batch-byte-compile *.el`
 
 ## Notes for Agents
 
