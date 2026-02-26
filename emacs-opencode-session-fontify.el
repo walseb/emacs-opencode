@@ -296,11 +296,9 @@ Sets `match-data' group 0 to the matched region."
      (2 'opencode-markdown-italic-face t)
      (3 'opencode-markdown-markup-face t))
 
-    ;; Inline code: `code` — backticks get markup face, content gets code
-    (,(opencode-session--make-text-matcher "\\(`\\)\\([^`\n]+\\)\\(`\\)")
-     (1 'opencode-markdown-markup-face t)
-     (2 'opencode-markdown-code-face t)
-     (3 'opencode-markdown-markup-face t))
+    ;; Inline code: `code` or ``code`` — handled by a function matcher
+    ;; that tries double-backtick first to avoid misparsing `` `x` ``.
+    (opencode-session--fontify-inline-code)
 
     ;; Links: [text](url)
     (,(opencode-session--make-text-matcher
@@ -310,6 +308,50 @@ Sets `match-data' group 0 to the matched region."
      (3 'opencode-markdown-markup-face t)
      (4 'opencode-markdown-link-url-face t)))
   "Font-lock keywords for markdown syntax in text part regions.")
+
+;;; Inline code fontification
+
+(defun opencode-session--fontify-inline-code (limit)
+  "Font-lock matcher for inline code spans up to LIMIT.
+Handles both double-backtick (`` ``...`` ``) and single-backtick
+(`` `...` ``) spans.  Double-backtick is tried first at each position
+so that `` `` `x` `` `` is parsed as one double-backtick span rather
+than mismatched single-backtick spans.  Applies faces via
+`put-text-property' directly."
+  (let (found)
+    (while (and (not found) (re-search-forward "``?" limit t))
+      (when (opencode-session--in-part-p (match-beginning 0)
+                                         "user-text" "assistant-text")
+        (let ((start (match-beginning 0))
+              (double-p (= (- (match-end 0) (match-beginning 0)) 2)))
+          (if double-p
+              ;; Double-backtick: `` ... ``
+              (if (re-search-forward "``" limit t)
+                  (let ((end (match-end 0)))
+                    (put-text-property start (+ start 2)
+                                       'face 'opencode-markdown-markup-face)
+                    (put-text-property (+ start 2) (- end 2)
+                                       'face 'opencode-markdown-code-face)
+                    (put-text-property (- end 2) end
+                                       'face 'opencode-markdown-markup-face)
+                    (set-match-data (list start end))
+                    (setq found t))
+                ;; No closing `` found, skip
+                (goto-char (match-end 0)))
+            ;; Single-backtick: ` ... ` (no newlines in content)
+            (if (re-search-forward "`" (line-end-position) t)
+                (let ((end (match-end 0)))
+                  (put-text-property start (1+ start)
+                                     'face 'opencode-markdown-markup-face)
+                  (put-text-property (1+ start) (1- end)
+                                     'face 'opencode-markdown-code-face)
+                  (put-text-property (1- end) end
+                                     'face 'opencode-markdown-markup-face)
+                  (set-match-data (list start end))
+                  (setq found t))
+              ;; No closing ` on this line, skip
+              (goto-char (line-end-position)))))))
+    found))
 
 ;;; Code block fontification
 
