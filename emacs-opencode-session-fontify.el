@@ -265,26 +265,29 @@ Sets `match-data' group 0 to the matched region."
      (1 'opencode-markdown-list-bullet-face t))
 
     ;; Bold: **text** — delimiters get markup face, content gets bold
+    ;; Content must not span newlines; must not be space-adjacent to delimiters.
     (,(opencode-session--make-text-matcher
-       "\\(?:^\\|[^\\\\*_]\\)\\(\\*\\*\\)\\(.+?\\)\\(\\*\\*\\)")
+       "\\(?:^\\|[^\\\\*_]\\)\\(\\*\\*\\)\\([^* \n][^*\n]*?[^\\\\* \n]\\|[^* \n]\\)\\(\\*\\*\\)")
      (1 'opencode-markdown-markup-face t)
      (2 'opencode-markdown-bold-face t)
      (3 'opencode-markdown-markup-face t))
     (,(opencode-session--make-text-matcher
-       "\\(?:^\\|[^\\\\*_]\\)\\(__\\)\\(.+?\\)\\(__\\)")
+       "\\(?:^\\|[^\\\\*_]\\)\\(__\\)\\([^_ \n][^_\n]*?[^\\\\_  \n]\\|[^_ \n]\\)\\(__\\)")
      (1 'opencode-markdown-markup-face t)
      (2 'opencode-markdown-bold-face t)
      (3 'opencode-markdown-markup-face t))
 
     ;; Italic: *text* or _text_ (not ** or __)
-    ;; Delimiters get markup face, content gets italic
+    ;; Delimiters get markup face, content gets italic.
+    ;; Content must not span newlines; must not be space-adjacent to delimiters.
+    ;; Closing delimiter must not be followed by another * or _ (avoids matching inside **).
     (,(opencode-session--make-text-matcher
-       "\\(?:^\\|[^\\\\*]\\)\\(\\*\\)\\([^*].*?[^\\\\*]\\)\\(\\*\\)")
+       "\\(?:^\\|[^\\\\*]\\)\\(\\*\\)\\([^* \n][^*\n]*?[^\\\\* \n]\\|[^* \n]\\)\\(\\*\\)\\(?:[^*]\\|$\\)")
      (1 'opencode-markdown-markup-face t)
      (2 'opencode-markdown-italic-face t)
      (3 'opencode-markdown-markup-face t))
     (,(opencode-session--make-text-matcher
-       "\\(?:^\\|[^\\\\_ ]\\)\\(_\\)\\([^_].*?[^\\\\_ ]\\)\\(_\\)")
+       "\\(?:^\\|[^\\\\_  ]\\)\\(_\\)\\([^_ \n][^_\n]*?[^\\\\_  \n]\\|[^_ \n]\\)\\(_\\)\\(?:[^_]\\|$\\)")
      (1 'opencode-markdown-markup-face t)
      (2 'opencode-markdown-italic-face t)
      (3 'opencode-markdown-markup-face t))
