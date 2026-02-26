@@ -271,8 +271,10 @@ Sets `match-data' group 0 to the matched region."
      (1 'opencode-markdown-markup-face t)
      (2 'opencode-markdown-bold-face t)
      (3 'opencode-markdown-markup-face t))
+    ;; __text__ requires word boundaries: opening _ not after alnum,
+    ;; closing _ not before alnum (matches CommonMark spec for _ delimiters).
     (,(opencode-session--make-text-matcher
-       "\\(?:^\\|[^\\\\*_]\\)\\(__\\)\\([^_ \n][^_\n]*?[^\\\\_  \n]\\|[^_ \n]\\)\\(__\\)")
+       "\\(?:^\\|[^\\\\*_[:alnum:]]\\)\\(__\\)\\([^_ \n][^_\n]*?[^\\\\_  \n]\\|[^_ \n]\\)\\(__\\)\\(?:[^_[:alnum:]]\\|$\\)")
      (1 'opencode-markdown-markup-face t)
      (2 'opencode-markdown-bold-face t)
      (3 'opencode-markdown-markup-face t))
@@ -286,8 +288,10 @@ Sets `match-data' group 0 to the matched region."
      (1 'opencode-markdown-markup-face t)
      (2 'opencode-markdown-italic-face t)
      (3 'opencode-markdown-markup-face t))
+    ;; _text_ requires word boundaries: opening _ not after alnum,
+    ;; closing _ not before alnum (matches CommonMark spec for _ delimiters).
     (,(opencode-session--make-text-matcher
-       "\\(?:^\\|[^\\\\_  ]\\)\\(_\\)\\([^_ \n][^_\n]*?[^\\\\_  \n]\\|[^_ \n]\\)\\(_\\)\\(?:[^_]\\|$\\)")
+       "\\(?:^\\|[^\\\\_[:alnum:]]\\)\\(_\\)\\([^_ \n][^_\n]*?[^\\\\_  \n]\\|[^_ \n]\\)\\(_\\)\\(?:[^_[:alnum:]]\\|$\\)")
      (1 'opencode-markdown-markup-face t)
      (2 'opencode-markdown-italic-face t)
      (3 'opencode-markdown-markup-face t))
