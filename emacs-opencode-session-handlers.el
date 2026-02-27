@@ -173,10 +173,13 @@
               (message "OpenCode: failed to reply to permission request")))))
 
 (defun opencode-session--handle-permission-asked (_event data)
-  "Handle the permission.asked SSE DATA."
+  "Handle the permission.asked SSE DATA.
+Falls back to any live session buffer when SESSION-ID is unknown,
+e.g. for permission requests originating from subagent sessions."
   (let* ((permission (alist-get 'properties data))
          (session-id (alist-get 'sessionID permission)))
-    (when-let ((buffer (opencode-session--buffer-for-session session-id)))
+    (when-let ((buffer (or (opencode-session--buffer-for-session session-id)
+                           (opencode-session--any-live-session-buffer))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (opencode-session--prompt-permission permission))))))
@@ -284,12 +287,15 @@ Returns a list of answer strings."
                 (message "OpenCode: failed to reply to question"))))))
 
 (defun opencode-session--handle-question-asked (_event data)
-  "Handle the question.asked SSE DATA."
+  "Handle the question.asked SSE DATA.
+Falls back to any live session buffer when SESSION-ID is unknown,
+e.g. for questions originating from subagent sessions."
   (let* ((question (alist-get 'properties data))
          (session-id (alist-get 'sessionID question))
          (request-id (alist-get 'id question)))
     (message "OpenCode: question.asked for %s (session %s)" request-id session-id)
-    (when-let ((buffer (opencode-session--buffer-for-session session-id)))
+    (when-let ((buffer (or (opencode-session--buffer-for-session session-id)
+                           (opencode-session--any-live-session-buffer))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (message "OpenCode: prompting question %s in %s" request-id (buffer-name))

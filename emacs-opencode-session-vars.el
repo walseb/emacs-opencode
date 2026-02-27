@@ -40,6 +40,18 @@
   "Return the session buffer for SESSION-ID, if any."
   (gethash session-id opencode-session--buffers))
 
+(defun opencode-session--any-live-session-buffer ()
+  "Return any live buffer from `opencode-session--buffers'.
+This is used as a fallback when a session ID (e.g. from a subagent)
+has no registered buffer.  Any buffer with a live connection to the
+same OpenCode instance can handle the request."
+  (let (result)
+    (maphash (lambda (_id buf)
+               (when (and (not result) (buffer-live-p buf))
+                 (setq result buf)))
+             opencode-session--buffers)
+    result))
+
 (defun opencode-session--normalize-items (items)
   "Normalize ITEMS to a list when vector or list."
   (cond
