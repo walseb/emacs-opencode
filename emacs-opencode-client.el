@@ -17,7 +17,8 @@ connection base URL. DATA is passed through to `request`. When JSON is
 provided, it is encoded and sent with a JSON content type. PARSER defaults to
 `json-read` when omitted. HEADERS is an alist of HTTP headers. Any remaining
 ARGS are forwarded to `request`."
-  (let* ((base-url (opencode-connection-base-url conn))
+  (let* ((request-backend 'url-retrieve)
+         (base-url (opencode-connection-base-url conn))
          (url (concat (string-remove-suffix "/" base-url) path))
          (auth (when (opencode-connection-password conn)
                  (list (or (opencode-connection-username conn) "opencode")

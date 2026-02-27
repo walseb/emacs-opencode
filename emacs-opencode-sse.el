@@ -29,6 +29,14 @@
   :type 'boolean
   :group 'emacs-opencode)
 
+(defcustom opencode-sse-log-max-size (* 1024 1024)
+  "Maximum size in bytes for the SSE log buffer.
+When the buffer exceeds this size, the oldest content is discarded.
+Set to nil to disable truncation."
+  :type '(choice (integer :tag "Max bytes")
+                 (const :tag "Unlimited" nil))
+  :group 'emacs-opencode)
+
 (defvar opencode-sse--handlers nil
   "Alist mapping SSE event names to handler lists.")
 
@@ -204,18 +212,23 @@ Returns the streaming process."
                    :command command
                    :noquery t
                    :filter (lambda (proc output)
-                             (when opencode-sse-log-output
-                               (when-let ((buffer (process-buffer proc)))
-                                 (when (buffer-live-p buffer)
-                                   (with-current-buffer buffer
-                                     (let ((inhibit-read-only t)
-                                           (inhibit-modification-hooks t)
-                                           (inhibit-redisplay t))
-                                       (save-excursion
-                                         (goto-char (process-mark proc))
-                                         (insert output)
-                                         (set-marker (process-mark proc) (point))))))))
-                             (opencode-sse--process-chunk connection output))
+                              (when opencode-sse-log-output
+                                (when-let ((buffer (process-buffer proc)))
+                                  (when (buffer-live-p buffer)
+                                    (with-current-buffer buffer
+                                      (let ((inhibit-read-only t)
+                                            (inhibit-modification-hooks t)
+                                            (inhibit-redisplay t))
+                                        (save-excursion
+                                          (goto-char (process-mark proc))
+                                          (insert output)
+                                          (set-marker (process-mark proc) (point)))
+                                        (when (and opencode-sse-log-max-size
+                                                   (> (buffer-size) opencode-sse-log-max-size))
+                                          (let ((target (/ opencode-sse-log-max-size 2)))
+                                            (delete-region (point-min)
+                                                           (- (point-max) target)))))))))
+                              (opencode-sse--process-chunk connection output))
                    :sentinel (lambda (proc _event)
                                (when (memq (process-status proc) '(exit signal))
                                  (when (buffer-live-p buffer)
