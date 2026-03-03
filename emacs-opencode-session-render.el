@@ -2,6 +2,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'ansi-color)
 (require 'emacs-opencode-session-vars)
 (require 'emacs-opencode-message)
 (require 'emacs-opencode-connection)
@@ -36,6 +37,98 @@
   '((t :inherit shadow))
   "Face used for tool call lines."
   :group 'emacs-opencode)
+
+(defcustom opencode-session-bash-output-max-lines 10
+  "Maximum number of shell output lines to show before collapsing."
+  :type 'integer
+  :group 'emacs-opencode)
+
+;;; Collapse / expand for long tool output
+
+(defvar opencode-session--collapse-keymap
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'opencode-session-toggle-collapse)
+    (define-key map (kbd "TAB") #'opencode-session-toggle-collapse)
+    (define-key map [mouse-1] #'opencode-session-toggle-collapse)
+    map)
+  "Keymap for collapsible tool output indicators.")
+
+(defun opencode-session--collapse-symbol (part-id)
+  "Return a unique invisibility symbol for PART-ID."
+  (intern (format "opencode-collapse-%s" part-id)))
+
+(defun opencode-session-toggle-collapse ()
+  "Toggle collapsed tool output at point."
+  (interactive)
+  (let ((sym (get-text-property (point) 'opencode-collapse-sym)))
+    (when sym
+      (if (memq sym buffer-invisibility-spec)
+          (progn
+            (remove-from-invisibility-spec sym)
+            (let ((inhibit-read-only t))
+              (opencode-session--update-collapse-indicator (point) t)))
+        (add-to-invisibility-spec sym)
+        (let ((inhibit-read-only t))
+          (opencode-session--update-collapse-indicator (point) nil))))))
+
+(defun opencode-session--update-collapse-indicator (pos expanded)
+  "Update the collapse indicator text near POS for EXPANDED state."
+  (let* ((sym (get-text-property pos 'opencode-collapse-sym))
+         (count (get-text-property pos 'opencode-collapse-count)))
+    (when (and sym count)
+      (save-excursion
+        ;; Find the indicator line by scanning for matching symbol
+        (goto-char (point-min))
+        (let ((found nil))
+          (while (and (not found) (< (point) (point-max)))
+            (if (eq (get-text-property (point) 'opencode-collapse-indicator) sym)
+                (setq found t)
+              (goto-char (next-single-property-change
+                          (point) 'opencode-collapse-indicator nil (point-max)))))
+          (when found
+            (let* ((line-start (line-beginning-position))
+                   (line-end (line-end-position))
+                   (new-text (if expanded
+                                 "▼ collapse"
+                               (format "▶ %d more lines" count))))
+              (delete-region line-start line-end)
+              (insert (propertize new-text
+                                  'opencode-part-type "tool"
+                                  'opencode-collapse-sym sym
+                                  'opencode-collapse-count count
+                                  'opencode-collapse-indicator sym
+                                  'keymap opencode-session--collapse-keymap
+                                  'mouse-face 'highlight)))))))))
+
+;;; Strip ANSI escape sequences
+
+(defun opencode-session--strip-ansi (string)
+  "Remove ANSI escape sequences from STRING."
+  (when (stringp string)
+    (ansi-color-filter-apply string)))
+
+;;; Format input parameters for generic/MCP tools
+
+(defun opencode-session--format-input-params (input)
+  "Format primitive values from INPUT alist as [key=value, ...].
+Only includes string, number, and boolean values."
+  (when (listp input)
+    (let ((parts nil))
+      (dolist (pair input)
+        (when (consp pair)
+          (let ((key (car pair))
+                (value (cdr pair)))
+            (when (or (stringp value)
+                      (numberp value)
+                      (eq value t)
+                      (eq value :json-false))
+              (let ((val-str (cond
+                              ((eq value t) "true")
+                              ((eq value :json-false) "false")
+                              (t (format "%s" value)))))
+                (push (format "%s=%s" key val-str) parts))))))
+      (when parts
+        (format "[%s]" (string-join (nreverse parts) ", "))))))
 
 (defun opencode-session--render-messages ()
   "Render all messages for the session."
@@ -176,7 +269,7 @@ properties and the user prefix indicator."
          (status (or (alist-get 'status state) "pending"))
          (text (opencode-session--tool-summary tool input metadata status state))
          (error-line (opencode-session--tool-error-line status state))
-         (extra (opencode-session--tool-extra-block tool input metadata))
+         (extra (opencode-session--tool-extra-block tool input metadata part))
          (is-diff (and extra
                        (not (string-empty-p (string-trim extra)))
                        (member tool '("edit" "apply_patch")))))
@@ -341,18 +434,59 @@ INPUT and METADATA may include the file path."
         title
       "→ Patch")))
 
-(defun opencode-session--tool-extra-block (tool input metadata)
-  "Return extra block content for TOOL from INPUT or METADATA."
+(defun opencode-session--tool-extra-block (tool input metadata &optional part)
+  "Return extra block content for TOOL from INPUT or METADATA.
+PART is the full message part, used for collapse identifiers."
   (cond
    ((member tool '("edit" "apply_patch"))
     (when (listp metadata)
       (opencode-session--nonempty-string (alist-get 'diff metadata))))
    ((string= tool "bash")
-    (let ((command (or (alist-get 'command input)
-                       (when (listp metadata)
-                         (alist-get 'command metadata)))))
-      (when (opencode-session--nonempty-string command)
-        (format "\n$ %s\n" command))))))
+    (opencode-session--bash-extra-block input metadata part))))
+
+(defun opencode-session--bash-extra-block (input metadata part)
+  "Build the extra block for a bash tool call.
+Shows the command and output from INPUT and METADATA.
+PART provides the part ID for collapse identifiers.
+Output beyond `opencode-session-bash-output-max-lines' is
+hidden with a per-part invisibility symbol and a clickable
+toggle indicator."
+  (let* ((command (or (alist-get 'command input)
+                      (when (listp metadata)
+                        (alist-get 'command metadata))))
+         (raw-output (when (listp metadata)
+                       (alist-get 'output metadata)))
+         (output (when (opencode-session--nonempty-string raw-output)
+                   (opencode-session--strip-ansi (string-trim raw-output))))
+         (cmd-line (when (opencode-session--nonempty-string command)
+                     (format "$ %s" command)))
+         (max-lines opencode-session-bash-output-max-lines))
+    (when (or cmd-line output)
+      (let ((result (concat "\n" (or cmd-line ""))))
+        (when (opencode-session--nonempty-string output)
+          (let* ((lines (split-string output "\n"))
+                 (total (length lines)))
+            (if (and (> total max-lines) part)
+                (let* ((part-id (opencode-message-part-id part))
+                       (sym (opencode-session--collapse-symbol part-id))
+                       (visible (string-join (cl-subseq lines 0 max-lines) "\n"))
+                       (hidden (string-join (cl-subseq lines max-lines) "\n"))
+                       (overflow (- total max-lines))
+                       (indicator (format "▶ %d more lines" overflow)))
+                  ;; Register the symbol so the region starts collapsed
+                  (add-to-invisibility-spec sym)
+                  (setq result (concat result "\n" visible "\n"
+                                       (propertize (concat hidden "\n")
+                                                   'invisible sym)
+                                       (propertize indicator
+                                                   'opencode-part-type "tool"
+                                                   'opencode-collapse-sym sym
+                                                   'opencode-collapse-count overflow
+                                                   'opencode-collapse-indicator sym
+                                                   'keymap opencode-session--collapse-keymap
+                                                   'mouse-face 'highlight))))
+              (setq result (concat result "\n" output)))))
+        (concat result "\n")))))
 
 (defun opencode-session--task-summary-current (summary)
   "Return the latest non-pending summary item from SUMMARY."
@@ -406,18 +540,13 @@ INPUT and METADATA may include the file path."
      (delq nil (list "✱ Webfetch" url args "↗"))
      " ")))
 
-(defun opencode-session--tool-generic (tool input status state)
+(defun opencode-session--tool-generic (tool input _status _state)
   "Render a fallback summary line for TOOL.
 
-INPUT, STATUS, and STATE provide context for the description."
-  (let* ((description (or (opencode-session--nonempty-string
-                           (alist-get 'description input))
-                          (opencode-session--nonempty-string
-                           (alist-get 'title state))
-                          tool
-                          "tool"))
-         (suffix (and status (format "[%s]" status))))
-    (string-join (delq nil (list (format "✱ %s" description) suffix)) " ")))
+INPUT is used to extract primitive parameters for display."
+  (let* ((name (or tool "tool"))
+         (params (opencode-session--format-input-params input)))
+    (string-join (delq nil (list (format "⚙ %s" name) params)) " ")))
 
 (defun opencode-session--nonempty-string (value)
   "Return VALUE when it is a non-empty string."
