@@ -27,10 +27,20 @@ emacs -Q -L . -L ~/.emacs.d/straight/build/request -batch -f batch-byte-compile 
 
 # Run checkdoc on a single file (docstring style)
 emacs -Q -L . -L ~/.emacs.d/straight/build/request -batch --eval '(checkdoc-file "emacs-opencode-client.el")'
+
+# Run all ERT tests
+emacs -Q -L . -L ~/.emacs.d/straight/build/request -batch -L tests -l tests/run-tests.el -f ert-run-tests-batch-and-exit
+
+# Run a single test file
+emacs -Q -L . -L ~/.emacs.d/straight/build/request -batch -L tests -l tests/emacs-opencode-sse-test.el -f ert-run-tests-batch-and-exit
+
+# Run tests matching a pattern
+emacs -Q -L . -L ~/.emacs.d/straight/build/request -batch -L tests -l tests/run-tests.el --eval '(ert-run-tests-batch-and-exit "test-opencode-sse")'
 ```
 
-No test framework is set up yet. If adding tests, use ERT and document
-how to run a single test in this section.
+Tests live in `tests/` with one file per source module (e.g.,
+`tests/emacs-opencode-sse-test.el` tests `emacs-opencode-sse.el`).
+`tests/run-tests.el` loads all test files for batch execution.
 
 `.dir-locals.el` adds the repo root to `load-path` so `require` works
 during interactive development.
