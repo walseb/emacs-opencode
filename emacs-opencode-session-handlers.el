@@ -10,6 +10,7 @@
 
 (declare-function opencode-session--update-session "emacs-opencode-session-mode")
 (declare-function opencode-session--update-status "emacs-opencode-session-mode")
+(declare-function opencode-session--render-header "emacs-opencode-session-header")
 (declare-function opencode-session--upsert-message "emacs-opencode-session-mode")
 (declare-function opencode-session--update-message-part "emacs-opencode-session-mode")
 (declare-function opencode-session--find-message "emacs-opencode-session-mode")
@@ -49,6 +50,34 @@
   (let* ((properties (alist-get 'properties data))
          (session-id (alist-get 'sessionID properties)))
     (opencode-session--update-status session-id "idle")))
+
+(defun opencode-session--session-error-text (error-info)
+  "Return user-facing text extracted from session ERROR-INFO."
+  (let* ((data (and (listp error-info) (alist-get 'data error-info)))
+         (detail (and (listp data) (alist-get 'message data))))
+    (cond
+     ((and (stringp detail) (not (string-empty-p detail))) detail)
+     ((and (listp error-info)
+           (stringp (alist-get 'name error-info))
+           (not (string-empty-p (alist-get 'name error-info))))
+      (alist-get 'name error-info))
+     ((stringp error-info) error-info)
+     (t "An error occurred"))))
+
+(defun opencode-session--handle-session-error (_event data)
+  "Handle the session.error SSE DATA."
+  (let* ((properties (alist-get 'properties data))
+         (session-id (alist-get 'sessionID properties))
+         (error-info (alist-get 'error properties))
+         (error-name (and (listp error-info) (alist-get 'name error-info))))
+    (unless (and (stringp error-name)
+                 (string= error-name "MessageAbortedError"))
+      (message "OpenCode: %s" (opencode-session--session-error-text error-info))
+      (when session-id
+        (when-let ((buffer (opencode-session--buffer-for-session session-id)))
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (opencode-session--render-header))))))))
 
 ;;; Message event handlers
 
@@ -448,6 +477,9 @@ Returns nil when PATH is not a string."
 
 (opencode-sse-define-handler session-idle "session.idle" (_event data)
   (opencode-session--handle-session-idle _event data))
+
+(opencode-sse-define-handler session-error "session.error" (_event data)
+  (opencode-session--handle-session-error _event data))
 
 (opencode-sse-define-handler permission-asked "permission.asked" (_event data)
   (opencode-session--handle-permission-asked _event data))

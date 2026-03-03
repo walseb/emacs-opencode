@@ -516,6 +516,7 @@ PREVIOUS-NAME is the previous buffer name to compare against."
     (setf (opencode-message-time-created message) created)
     (setf (opencode-message-time-completed message) completed)
     (setf (opencode-message-finish message) (alist-get 'finish info))
+    (setf (opencode-message-error message) (alist-get 'error info))
     (setf (opencode-message-summary message) (alist-get 'summary info))
     (setf (opencode-message-info message) info)))
 

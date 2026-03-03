@@ -35,6 +35,7 @@
   time-created
   time-completed
   finish
+  error
   summary
   parts
   text

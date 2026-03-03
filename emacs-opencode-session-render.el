@@ -231,10 +231,30 @@ properties and the user prefix indicator."
 
 (defun opencode-session--message-text (message)
   "Return the renderable text for MESSAGE."
-  (let ((parts (opencode-message-parts message)))
-    (if (and parts (listp parts))
-        (opencode-session--render-message-parts message parts)
-      (or (opencode-message-text message) ""))))
+  (let* ((parts (opencode-message-parts message))
+         (base (if (and parts (listp parts))
+                   (opencode-session--render-message-parts message parts)
+                 (or (opencode-message-text message) "")))
+         (error-text (opencode-session--message-error-text message)))
+    (if error-text
+        (if (string-empty-p (string-trim-right base))
+            error-text
+          (concat (string-trim-right base) "\n\n" error-text))
+      base)))
+
+(defun opencode-session--message-error-text (message)
+  "Return a formatted assistant error string for MESSAGE, or nil."
+  (when (and (string= (opencode-message-role message) "assistant")
+             (consp (opencode-message-error message)))
+    (let* ((error-info (opencode-message-error message))
+           (name (alist-get 'name error-info))
+           (data (alist-get 'data error-info))
+           (detail (and (listp data)
+                        (opencode-session--nonempty-string (alist-get 'message data)))))
+      (unless (string= name "MessageAbortedError")
+        (propertize (format "Error: %s" (or detail "An error occurred"))
+                    'opencode-part-type "assistant-text"
+                    'face 'error)))))
 
 (defun opencode-session--render-message-parts (message parts)
   "Render PARTS for MESSAGE into a string."
