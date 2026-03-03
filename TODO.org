@@ -1,5 +1,6 @@
 #+TITLE: Emacs OpenCode TODO
 
+* TODO add tests
 * IN PROGRESS completion-at-point in session buffer input
 - slash commands
 - @agent, once @-mentioning agents is supported
@@ -21,6 +22,10 @@ E.g. "OpenCode wants to rg foobar .*" or "OpenCode wants to foo/bar/baz.txt". Wh
 * IN PROGRESS Address poor performance of SSE buffer/event dispatch
 - already implemented: we now only JSON-parse events with registered handlers
 - there is probably still more room to improve here
+- further improvements made:
+  - we totally skip processing events without registered handlers now
+  - made handler run sync by default instead of queueing via run-at-time 0
+  - switched to url-retrieve request.el backend instead of curl, which seemed to speed up localhost network calls
 * TODO Add newline before "block level" message parts if they are the first part of the message and there isn't a blank line above
 * TODO Render markdown tables with aligned columns
 Rewrite table text at render time: detect consecutive `|...|` lines, measure max column widths, and pad cells.
