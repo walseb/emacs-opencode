@@ -14,6 +14,7 @@
 (require 'emacs-opencode-client)
 
 (declare-function opencode-run-server "emacs-opencode" (directory &optional on-ready))
+(declare-function opencode-session--maybe-register-subagent "emacs-opencode-session-handlers")
 
 (defcustom opencode-session-input-prompt "❯ "
   "Prompt string shown before the session input area."
@@ -528,7 +529,10 @@ PREVIOUS-NAME is the previous buffer name to compare against."
 (defun opencode-session--update-message-part (part delta)
   "Update message part from PART with optional DELTA."
   (let* ((message-id (alist-get 'messageID part))
+         (session-id (alist-get 'sessionID part))
          (message (opencode-session--find-message message-id)))
+    ;; Register subagent mapping when we see a task tool with a sessionId
+    (opencode-session--maybe-register-subagent part session-id)
     (when message
       (let* ((part-id (alist-get 'id part))
              (existing (assoc part-id (opencode-message-parts message)))
@@ -738,10 +742,14 @@ Call ON-HISTORY-LOADED with BUFFER after the request completes."
   "Add a message ITEM returned from the API."
   (let* ((info (alist-get 'info item))
          (parts (alist-get 'parts item))
+         (session-id (alist-get 'sessionID info))
          (message (opencode-session--message-from-info info)))
     (when message
       (setf (opencode-message-parts message)
             (opencode-session--hydrate-parts parts))
+      ;; Register subagent mappings for any task tool parts
+      (dolist (raw-part (opencode-session--normalize-items parts))
+        (opencode-session--maybe-register-subagent raw-part session-id))
       (setf (opencode-message-text message)
             (opencode-session--message-text message))
       (setq opencode-session--messages

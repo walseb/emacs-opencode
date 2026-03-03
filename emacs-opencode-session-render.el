@@ -6,7 +6,10 @@
 (require 'emacs-opencode-session-vars)
 (require 'emacs-opencode-message)
 (require 'emacs-opencode-connection)
+(require 'emacs-opencode-session)
 (require 'emacs-opencode-session-fontify)
+
+(declare-function opencode--ensure-session-buffer "emacs-opencode")
 
 (defcustom opencode-session-show-reasoning nil
   "When non-nil, display reasoning/thinking blocks in the session buffer."
@@ -99,6 +102,29 @@
                                   'opencode-collapse-indicator sym
                                   'keymap opencode-session--collapse-keymap
                                   'mouse-face 'highlight)))))))))
+
+;;; Task tool interactivity
+
+(defvar opencode-session--task-keymap
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'opencode-session-open-subagent)
+    (define-key map (kbd "TAB") #'opencode-session-open-subagent)
+    (define-key map [mouse-1] #'opencode-session-open-subagent)
+    map)
+  "Keymap for clickable task tool blocks.")
+
+(defun opencode-session-open-subagent ()
+  "Open the subagent session at point."
+  (interactive)
+  (let ((session-id (get-text-property (point) 'opencode-subagent-session-id)))
+    (if session-id
+        (let ((connection opencode-session--connection))
+          (if connection
+              (opencode--ensure-session-buffer
+               (opencode-session-create :id session-id)
+               connection)
+            (message "OpenCode: no connection available")))
+      (message "OpenCode: no subagent session at point"))))
 
 ;;; Strip ANSI escape sequences
 
@@ -220,8 +246,8 @@ properties and the user prefix indicator."
              (rendered (opencode-session--render-message-part message part))
              (tool-part (string= part-type "tool"))
              (block-tool (and tool-part (member tool '("todowrite" "todoread"
-                                                       "edit" "apply_patch"
-                                                       "bash")))))
+                                                        "edit" "apply_patch"
+                                                        "bash" "task")))))
         (when rendered
           (cond
            ((or (string= part-type "text") (string= part-type "reasoning") block-tool)
@@ -260,6 +286,13 @@ properties and the user prefix indicator."
       (opencode-session--tool-part-line part))
      (t nil))))
 
+(defun opencode-session--tool-propertize (text)
+  "Add the tool part-type property to TEXT, preserving existing properties."
+  (let ((result (copy-sequence text)))
+    (add-text-properties 0 (length result)
+                         '(opencode-part-type "tool") result)
+    result))
+
 (defun opencode-session--tool-part-line (part)
   "Render a tool call PART as a formatted line or block."
   (let* ((tool (opencode-message-part-tool part))
@@ -278,28 +311,29 @@ properties and the user prefix indicator."
       (setq text (concat text "\n" error-line)))
     (if is-diff
         ;; Diff extra block: tool summary tagged as tool, diff tagged for font-lock
-        (concat (propertize text 'opencode-part-type "tool")
+        (concat (opencode-session--tool-propertize text)
                 "\n"
                 (propertize extra 'opencode-part-type "diff"))
       ;; Non-diff extra: everything tagged as tool
       (when (and extra (not (string-empty-p (string-trim extra))))
         (setq text (concat text "\n" extra)))
-      (propertize text 'opencode-part-type "tool"))))
+      (opencode-session--tool-propertize text))))
 
 (defun opencode-session--tool-attach-status (text status)
-  "Append STATUS to the first line of TEXT when missing."
+  "Append STATUS to the first line of TEXT when missing.
+Preserves text properties on existing text."
   (if (and (stringp text)
            (stringp status)
            (member status '("pending" "running" "error")))
-      (let ((suffix (format "[%s]" status)))
-        (if (string-match-p (regexp-quote suffix) text)
+      (let ((suffix (format " [%s]" status)))
+        (if (string-match-p (regexp-quote (format "[%s]" status)) text)
             text
           (let* ((lines (split-string text "\n"))
                  (first (or (car lines) ""))
                  (rest (cdr lines))
                  (first-line (if (string-empty-p first)
-                                 suffix
-                               (format "%s %s" first suffix))))
+                                 (string-trim-left suffix)
+                               (concat first suffix))))
             (string-join (cons first-line rest) "\n"))))
     text))
 
@@ -488,47 +522,61 @@ toggle indicator."
               (setq result (concat result "\n" output)))))
         (concat result "\n")))))
 
-(defun opencode-session--task-summary-current (summary)
-  "Return the latest non-pending summary item from SUMMARY."
-  (cl-loop for item in (reverse summary)
+(defun opencode-session--task-current-tool (tools)
+  "Return the latest non-pending tool entry from TOOLS."
+  (cl-loop for item in (reverse tools)
            for state = (alist-get 'state item)
            for status = (alist-get 'status state)
            when (and status (not (string= status "pending")))
            return item))
 
-(defun opencode-session--task-summary-line (item)
-  "Return a summary line for ITEM."
+(defun opencode-session--task-tool-line (item)
+  "Return a formatted line for tool ITEM."
   (let* ((tool (alist-get 'tool item))
          (state (alist-get 'state item))
-         (title (alist-get 'title state))
+         (status (alist-get 'status state))
+         (title (and (string= status "completed")
+                     (alist-get 'title state)))
          (tool-label (and tool (capitalize tool)))
          (title-text (and title (not (string-empty-p title)) title)))
     (when tool-label
       (string-join (delq nil (list tool-label title-text)) " "))))
 
 (defun opencode-session--tool-task (input metadata)
-  "Render a summary line for the task tool."
+  "Render a summary line for the task tool.
+Uses live subagent tool tracking data when available."
   (let* ((subagent (or (alist-get 'subagent_type input)
                        (alist-get 'subagent-type input)
                        "task"))
          (description (or (alist-get 'description input)
                           (alist-get 'title metadata)))
          (agent-label (format "%s Task" (capitalize subagent)))
-         (summary (opencode-session--normalize-items (alist-get 'summary metadata)))
-         (count (length summary))
-         (current (opencode-session--task-summary-current summary))
-         (current-line (and current (opencode-session--task-summary-line current))))
-    (if (> count 0)
-        (let ((lines (list (format "✱ %s" agent-label))))
-          (if (and description (not (string-empty-p description)))
-              (push (format "%s (%s toolcalls)" description count) lines)
-            (push (format "%s toolcalls" count) lines))
-          (when current-line
-            (push (format "└ %s" current-line) lines))
-          (string-join (nreverse lines) "\n"))
-      (if (and description (not (string-empty-p description)))
-          (format "✱ %s %s" agent-label description)
-        (format "✱ %s" agent-label)))))
+         (session-id (alist-get 'sessionId metadata))
+         (tools (and session-id
+                     (opencode-session--subagent-tools-for session-id)))
+         (count (length tools))
+         (current (and tools (opencode-session--task-current-tool tools)))
+         (current-line (and current (opencode-session--task-tool-line current)))
+         (text
+          (if (> count 0)
+              (let ((lines (list (format "# %s" agent-label))))
+                (if (and description (not (string-empty-p description)))
+                    (push (format "%s (%d toolcalls)" description count) lines)
+                  (push (format "%d toolcalls" count) lines))
+                (when current-line
+                  (push (format "└ %s" current-line) lines))
+                (string-join (nreverse lines) "\n"))
+            (if (and description (not (string-empty-p description)))
+                (format "# %s %s" agent-label description)
+              (format "# %s" agent-label)))))
+    ;; Apply interactive properties when a subagent session exists
+    (if session-id
+        (propertize text
+                    'opencode-subagent-session-id session-id
+                    'keymap opencode-session--task-keymap
+                    'mouse-face 'highlight
+                    'help-echo "RET: open subagent session")
+      text)))
 
 (defun opencode-session--tool-webfetch (input)
   "Render a summary line for the webfetch tool."

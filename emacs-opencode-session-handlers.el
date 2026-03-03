@@ -62,16 +62,24 @@
           (opencode-session--upsert-message info))))))
 
 (defun opencode-session--handle-message-part-updated (_event data)
-  "Handle the message.part.updated SSE DATA."
+  "Handle the message.part.updated SSE DATA.
+Routes events to the owning session buffer.  When the session has
+no buffer but is a registered subagent, update the subagent tool
+tracking and re-render the parent task tool part."
   (let* ((properties (alist-get 'properties data))
          (part (alist-get 'part properties))
          (session-id (alist-get 'sessionID part))
          (delta (alist-get 'delta properties)))
-    (when-let ((buffer (opencode-session--buffer-for-session session-id)))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (when (member (alist-get 'type part) '("text" "tool" "reasoning"))
-            (opencode-session--update-message-part part delta)))))))
+    (if-let ((buffer (opencode-session--buffer-for-session session-id)))
+        ;; Normal case: session has a buffer
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (when (member (alist-get 'type part) '("text" "tool" "reasoning"))
+              (opencode-session--update-message-part part delta))))
+      ;; Subagent case: track tool calls and re-render parent
+      (when (and (string= (alist-get 'type part) "tool")
+                 (opencode-session--subagent-parent session-id))
+        (opencode-session--track-subagent-tool session-id part)))))
 
 (defun opencode-session--handle-message-part-delta (_event data)
   "Handle the message.part.delta SSE DATA."
@@ -95,6 +103,50 @@
                 (setf (opencode-message-text message)
                       (opencode-session--message-text message))
                 (opencode-session--render-message message)))))))))
+
+;;; Subagent tracking
+
+(defun opencode-session--track-subagent-tool (subagent-session-id part)
+  "Track a tool PART from SUBAGENT-SESSION-ID and re-render the parent."
+  (let* ((part-id (alist-get 'id part))
+         (tool (alist-get 'tool part))
+         (state (alist-get 'state part))
+         (parent-info (opencode-session--subagent-parent subagent-session-id)))
+    (when (and parent-info tool)
+      (opencode-session--update-subagent-tool
+       subagent-session-id part-id tool state)
+      ;; Re-render the task tool part in the parent session buffer
+      (let* ((parent-session-id (car parent-info))
+             (parent-buffer (opencode-session--buffer-for-session parent-session-id)))
+        (when (and parent-buffer (buffer-live-p parent-buffer))
+          (with-current-buffer parent-buffer
+            (opencode-session--rerender-task-part parent-info)))))))
+
+(defun opencode-session--rerender-task-part (parent-info)
+  "Re-render the task tool part identified by PARENT-INFO.
+PARENT-INFO is a cons (PARENT-SESSION-ID . TASK-PART-ID)."
+  (let ((task-part-id (cdr parent-info)))
+    (when-let ((message (opencode-session--find-message-by-part task-part-id)))
+      (opencode-session--render-message message))))
+
+(defun opencode-session--find-message-by-part (part-id)
+  "Find the message containing PART-ID in the current buffer."
+  (cl-find-if (lambda (message)
+                (assoc part-id (opencode-message-parts message)))
+              opencode-session--messages))
+
+(defun opencode-session--maybe-register-subagent (part parent-session-id)
+  "Register subagent mapping if PART is a task tool with a session ID.
+PARENT-SESSION-ID is the session that owns the task tool part."
+  (when (and (string= (alist-get 'type part) "tool")
+             (string= (alist-get 'tool part) "task"))
+    (let* ((state (alist-get 'state part))
+           (metadata (alist-get 'metadata state))
+           (subagent-session-id (alist-get 'sessionId metadata))
+           (part-id (alist-get 'id part)))
+      (when subagent-session-id
+        (opencode-session--register-subagent
+         subagent-session-id parent-session-id part-id)))))
 
 ;;; Permission handling
 
