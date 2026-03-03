@@ -175,14 +175,17 @@
 (defun opencode-session--handle-permission-asked (_event data)
   "Handle the permission.asked SSE DATA.
 Falls back to any live session buffer when SESSION-ID is unknown,
-e.g. for permission requests originating from subagent sessions."
+e.g. for permission requests originating from subagent sessions.
+Defers to a timer so `completing-read' does not block the process filter."
   (let* ((permission (alist-get 'properties data))
          (session-id (alist-get 'sessionID permission)))
-    (when-let ((buffer (or (opencode-session--buffer-for-session session-id)
-                           (opencode-session--any-live-session-buffer))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (opencode-session--prompt-permission permission))))))
+    (run-at-time 0 nil
+     (lambda ()
+       (when-let ((buffer (or (opencode-session--buffer-for-session session-id)
+                              (opencode-session--any-live-session-buffer))))
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (opencode-session--prompt-permission permission))))))))
 
 ;;; Question handling
 
@@ -289,17 +292,20 @@ Returns a list of answer strings."
 (defun opencode-session--handle-question-asked (_event data)
   "Handle the question.asked SSE DATA.
 Falls back to any live session buffer when SESSION-ID is unknown,
-e.g. for questions originating from subagent sessions."
+e.g. for questions originating from subagent sessions.
+Defers to a timer so `completing-read' does not block the process filter."
   (let* ((question (alist-get 'properties data))
          (session-id (alist-get 'sessionID question))
          (request-id (alist-get 'id question)))
-    (message "OpenCode: question.asked for %s (session %s)" request-id session-id)
-    (when-let ((buffer (or (opencode-session--buffer-for-session session-id)
-                           (opencode-session--any-live-session-buffer))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (message "OpenCode: prompting question %s in %s" request-id (buffer-name))
-          (opencode-session--prompt-question question))))))
+    (run-at-time 0 nil
+     (lambda ()
+       (message "OpenCode: question.asked for %s (session %s)" request-id session-id)
+       (when-let ((buffer (or (opencode-session--buffer-for-session session-id)
+                              (opencode-session--any-live-session-buffer))))
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (message "OpenCode: prompting question %s in %s" request-id (buffer-name))
+             (opencode-session--prompt-question question))))))))
 
 ;;; File revert handling
 

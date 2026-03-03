@@ -75,12 +75,8 @@ EVENT is a string. HANDLER receives EVENT and DATA."
 (defun opencode-sse--dispatch (event data)
   "Dispatch EVENT and DATA to registered handlers."
   (let ((handlers (alist-get event opencode-sse--handlers nil nil #'string=)))
-    (run-at-time
-     0 nil
-     (lambda (event data handlers)
-       (dolist (handler handlers)
-         (funcall handler event data)))
-     event data handlers)))
+    (dolist (handler handlers)
+      (funcall handler event data))))
 
 (defun opencode-sse--decode-data (data)
   "Decode DATA from JSON.
@@ -123,7 +119,7 @@ Signals an error when DATA is not valid JSON."
 (defun opencode-sse--initialize-state (connection)
   "Initialize SSE parse state on CONNECTION."
   (setf (opencode-connection-sse-state connection)
-        (list :buffer "" :data nil)))
+        (list :buffer "" :data nil :skipping nil)))
 
 (defun opencode-sse--ensure-state (connection)
   "Return the SSE parser state for CONNECTION."
@@ -143,7 +139,8 @@ Signals an error when DATA is not valid JSON."
 
 (defun opencode-sse--clear-event (connection)
   "Reset event fields in CONNECTION SSE state."
-  (opencode-sse--write-state connection :data nil))
+  (opencode-sse--write-state connection :data nil)
+  (opencode-sse--write-state connection :skipping nil))
 
 (defun opencode-sse--append-data (connection value)
   "Append VALUE to CONNECTION SSE data field."
@@ -159,16 +156,19 @@ Returns the type string, or nil if it cannot be extracted."
 
 (defun opencode-sse--finalize-event (connection)
   "Finalize and dispatch event from CONNECTION SSE state."
-  (let ((data (opencode-sse--read-state connection :data)))
-    (opencode-sse--clear-event connection)
-    (when data
-      (let ((event (opencode-sse--extract-event-type data)))
-        (unless event
-          (error "OpenCode SSE payload missing type field"))
-        ;; Only JSON-parse events that have registered handlers
-        (when (alist-get event opencode-sse--handlers nil nil #'string=)
-          (let ((payload (opencode-sse--decode-data data)))
-            (opencode-sse--dispatch event payload)))))))
+  (if (opencode-sse--read-state connection :skipping)
+      ;; We were skipping an unhandled event; just reset state.
+      (opencode-sse--clear-event connection)
+    (let ((data (opencode-sse--read-state connection :data)))
+      (opencode-sse--clear-event connection)
+      (when data
+        (let ((event (opencode-sse--extract-event-type data)))
+          (unless event
+            (error "OpenCode SSE payload missing type field"))
+          ;; Only JSON-parse events that have registered handlers
+          (when (alist-get event opencode-sse--handlers nil nil #'string=)
+            (let ((payload (opencode-sse--decode-data data)))
+              (opencode-sse--dispatch event payload))))))))
 
 (defun opencode-sse--process-line (connection line)
   "Process LINE in SSE parser CONNECTION state."
@@ -185,7 +185,22 @@ Returns the type string, or nil if it cannot be extracted."
       (when (string-prefix-p " " value)
         (setq value (substring value 1)))
       (pcase field
-        ("data" (opencode-sse--append-data connection value))
+        ("data"
+         (cond
+          ;; Already skipping an unhandled event -- do nothing.
+          ((opencode-sse--read-state connection :skipping) nil)
+          ;; First data line of a new event -- check if we should skip.
+          ((null (opencode-sse--read-state connection :data))
+           (let ((event-type (opencode-sse--extract-event-type value)))
+             (if (and event-type
+                      (null (alist-get event-type opencode-sse--handlers
+                                       nil nil #'string=)))
+                 ;; No handler registered; skip the rest of this event.
+                 (opencode-sse--write-state connection :skipping t)
+               ;; Has a handler (or type unknown); accumulate normally.
+               (opencode-sse--append-data connection value))))
+          ;; Subsequent data line of a handled event -- accumulate.
+          (t (opencode-sse--append-data connection value))))
         (_ nil))))))
 
 (defun opencode-sse--process-chunk (connection chunk)
