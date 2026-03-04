@@ -1,6 +1,5 @@
 #+TITLE: Emacs OpenCode TODO
 
-* TODO add tests
 * TODO fix issue where you can't scroll around when a response is streaming in
 * IN PROGRESS completion-at-point in session buffer input
 - slash commands
@@ -10,8 +9,6 @@
  - slash completion only triggers when the input begins with optional whitespace followed by "/"
 * TODO Support @-mentionig agents
 * TODO Support @file mentions (inlines file contents into prompt)
-* DONE Support !shell command mentions (inlines shell command output into prompt)
-CLOSED: [2026-03-04 Wed]
 * TODO Fix unclear wording for permission requests
 E.g. "OpenCode wants to rg foobar .*" or "OpenCode wants to foo/bar/baz.txt". What do those mean?
 * TODO Overview buffers (sessions/projects)
@@ -31,6 +28,10 @@ E.g. "OpenCode wants to rg foobar .*" or "OpenCode wants to foo/bar/baz.txt". Wh
 * TODO Add newline before "block level" message parts if they are the first part of the message and there isn't a blank line above
 * TODO Render markdown tables with aligned columns
 Rewrite table text at render time: detect consecutive `|...|` lines, measure max column widths, and pad cells.
+* DONE add tests
+CLOSED: [2026-03-04 Wed 10:01]
+* DONE Support !shell command mentions (inlines shell command output into prompt)
+CLOSED: [2026-03-04 Wed]
 * DONE Font lock in session buffers
 CLOSED: [2026-02-25 Tue]
 Should syntax highlight markdown and display diffs from the patch tool with diff syntax highlighting.
