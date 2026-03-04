@@ -265,6 +265,25 @@ when provided."
      :success success
      :error error)))
 
+(cl-defmethod opencode-client-session-shell
+  ((conn opencode-connection) session-id command
+   &key success error agent model)
+  "Execute shell COMMAND in SESSION-ID.
+
+AGENT names the agent to use. MODEL is a cons (PROVIDER-ID . MODEL-ID)
+included when provided."
+  (opencode-request
+   conn
+   'POST
+   (format "/session/%s/shell" session-id)
+   :json (append `((command . ,command))
+                 (when agent `((agent . ,agent)))
+                 (when model `((model . ((providerID . ,(car model))
+                                         (modelID . ,(cdr model)))))))
+   :parser (lambda () nil)
+   :success success
+   :error error))
+
 (provide 'emacs-opencode-client)
 
 ;;; emacs-opencode-client.el ends here

@@ -146,6 +146,49 @@
     (should (opencode-message-part-p (cdr (car result))))
     (should (equal (opencode-message-part-type (cdr (car result))) "text"))))
 
+;;; classify-input
+
+(ert-deftest test-opencode-session-mode/classify-input-message ()
+  "Regular text is classified as a message."
+  (let ((result (opencode-session--classify-input "hello world")))
+    (should (eq (car result) 'message))
+    (should (equal (cdr result) "hello world"))))
+
+(ert-deftest test-opencode-session-mode/classify-input-command ()
+  "Slash-prefixed text is classified as a command."
+  (let ((result (opencode-session--classify-input "/help")))
+    (should (eq (car result) 'command))
+    (should (equal (cdr result) "/help"))))
+
+(ert-deftest test-opencode-session-mode/classify-input-shell ()
+  "Bang-prefixed text is classified as shell with prefix stripped."
+  (let ((result (opencode-session--classify-input "!ls -la")))
+    (should (eq (car result) 'shell))
+    (should (equal (cdr result) "ls -la"))))
+
+(ert-deftest test-opencode-session-mode/classify-input-shell-strips-only-bang ()
+  "Only the leading ! is stripped from shell input."
+  (let ((result (opencode-session--classify-input "!echo '!hello'")))
+    (should (eq (car result) 'shell))
+    (should (equal (cdr result) "echo '!hello'"))))
+
+(ert-deftest test-opencode-session-mode/classify-input-shell-bare-bang ()
+  "A bare ! is classified as shell with empty payload."
+  (let ((result (opencode-session--classify-input "!")))
+    (should (eq (car result) 'shell))
+    (should (equal (cdr result) ""))))
+
+(ert-deftest test-opencode-session-mode/classify-input-slash-priority ()
+  "Slash takes priority when input starts with /."
+  (let ((result (opencode-session--classify-input "/!mixed")))
+    (should (eq (car result) 'command))))
+
+(ert-deftest test-opencode-session-mode/classify-input-bang-not-at-start ()
+  "A ! not at the start is treated as a regular message."
+  (let ((result (opencode-session--classify-input "hello !world")))
+    (should (eq (car result) 'message))
+    (should (equal (cdr result) "hello !world"))))
+
 (provide 'emacs-opencode-session-mode-test)
 
 ;;; emacs-opencode-session-mode-test.el ends here

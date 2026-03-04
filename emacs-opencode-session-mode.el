@@ -179,20 +179,30 @@ connection, and then call CALLBACK with the new connection."
         (message "OpenCode input is empty")
       (unless opencode-session--session
         (error "OpenCode session is not connected"))
-      (let ((buffer (current-buffer)))
+      (let ((buffer (current-buffer))
+            (classified (opencode-session--classify-input input)))
         (opencode-session--ensure-connection
          (lambda (connection)
            (when (buffer-live-p buffer)
              (with-current-buffer buffer
-               (if (string-prefix-p "/" input)
-                   (opencode-session--maybe-send-command connection
-                                                         opencode-session--session
-                                                         input)
-                 (opencode-session--send-input connection
+               (pcase (car classified)
+                 ('command
+                  (opencode-session--maybe-send-command connection
+                                                        opencode-session--session
+                                                        input))
+                 ('shell
+                  (opencode-session--send-shell connection
+                                                opencode-session--session
+                                                (cdr classified))
+                  (opencode-session--clear-input)
+                  (message "OpenCode shell command submitted"))
+                 ('message
+                  (opencode-session--send-input connection
                                                 opencode-session--session
                                                 input)
-                 (opencode-session--clear-input)
-                 (message "OpenCode message submitted"))))))))))
+                  (opencode-session--clear-input)
+                  (message "OpenCode message submitted")))))))))))
+
 
 ;;;###autoload
 (defun opencode-command ()
@@ -383,6 +393,36 @@ Restores INPUT when the request fails."
      :error (lambda (&rest _args)
               (opencode-session--restore-input input)
                 (message "OpenCode: failed to send message")))))
+
+(defun opencode-session--classify-input (input)
+  "Classify INPUT and return (TYPE . PAYLOAD).
+
+TYPE is one of the symbols `command', `shell', or `message'.
+PAYLOAD is the text to send: for `command' and `message' it is the
+original INPUT; for `shell' the leading \"!\" is stripped."
+  (cond
+   ((string-prefix-p "/" input) (cons 'command input))
+   ((string-prefix-p "!" input) (cons 'shell (substring input 1)))
+   (t (cons 'message input))))
+
+(defun opencode-session--send-shell (connection session command)
+  "Send shell COMMAND to SESSION using CONNECTION.
+
+Restores the original input (with leading !) when the request fails."
+  (let ((session-id (opencode-session-id session))
+        (agent opencode-session--agent)
+        (model (opencode-session--selected-model)))
+    (opencode-client-session-shell
+     connection
+     session-id
+     command
+     :agent agent
+     :model model
+     :success (lambda (&rest _args)
+                (message "OpenCode: shell command queued"))
+     :error (lambda (&rest _args)
+              (opencode-session--restore-input (concat "!" command))
+              (message "OpenCode: failed to send shell command")))))
 
 (defun opencode-session--maybe-send-command (connection session input)
   "Send slash command INPUT to SESSION using CONNECTION when applicable.
