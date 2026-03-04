@@ -22,7 +22,8 @@
   :group 'emacs-opencode)
 
 (defcustom opencode-session-completion-providers
-  '(opencode-session--complete-command)
+  '(opencode-session--complete-agent
+    opencode-session--complete-command)
   "Completion providers for `opencode-session-mode` input.
 
 Each function is called with point at the current input position and should
@@ -372,19 +373,48 @@ connection, and then call CALLBACK with the new connection."
   (when (and opencode-session--provider-id opencode-session--model-id)
     (format "%s/%s" opencode-session--provider-id opencode-session--model-id)))
 
+(defun opencode-session--extract-agent-mentions (input)
+  "Extract @-agent mentions from INPUT.
+Returns a list of agent name strings found in INPUT that match
+known completable agents.  Each mention must be preceded by
+whitespace or appear at the start of the string."
+  (let ((agents (opencode-session--available-completable-agents))
+        (mentions nil)
+        (start 0))
+    (when agents
+      (while (string-match "\\(?:^\\|[[:space:]]\\)@\\([a-zA-Z0-9_-]+\\)" input start)
+        (let ((name (match-string 1 input)))
+          (when (member name agents)
+            (push name mentions)))
+        (setq start (match-end 0))))
+    (delete-dups (nreverse mentions))))
+
+(defun opencode-session--build-message-parts (input)
+  "Build the message parts list for INPUT.
+Returns a list of part alists including a text part and any @-agent
+parts extracted from the input."
+  (let ((text-part `(("type" . "text") ("text" . ,input)))
+        (agent-names (opencode-session--extract-agent-mentions input))
+        (parts nil))
+    (push text-part parts)
+    (dolist (name agent-names)
+      (push `(("type" . "agent") ("name" . ,name)) parts))
+    (nreverse parts)))
+
 (defun opencode-session--send-input (connection session input)
   "Send INPUT to SESSION using CONNECTION.
 
-Restores INPUT when the request fails."
+Parses @-agent mentions from INPUT and includes them as agent parts
+alongside the text part.  Restores INPUT when the request fails."
   (let ((session-id (opencode-session-id session))
-        (payload `(("type" . "text") ("text" . ,input)))
+        (parts (opencode-session--build-message-parts input))
         (agent opencode-session--agent)
         (model (opencode-session--selected-model))
         (variant opencode-session--variant))
     (opencode-client-session-prompt-async
      connection
      session-id
-     (list payload)
+     parts
      :agent agent
      :variant variant
      :model model
@@ -736,6 +766,82 @@ Returns a cons cell (START . END) or nil when the input is not a slash command."
             (let* ((items (opencode-session--command-items commands))
                    (names (opencode-session--command-names items)))
               (when (and names (listp names))
+                (list start end names
+                      :exclusive 'no
+                      :company-prefix-length 0))))))))))
+
+;;; Agent @-mention completion
+
+(defun opencode-session--agent-completion-bounds ()
+  "Return bounds for an @-agent completion.
+
+Returns a cons cell (START . END) where START is the position after
+the `@' trigger and END is the end of the partial agent name, or nil
+when point is not in a valid @-mention context.  The `@' must be
+preceded by whitespace or the start of the input region."
+  (when (and opencode-session--input-start-marker
+             opencode-session--input-marker)
+    (let ((input-start (marker-position opencode-session--input-start-marker))
+          (input-end (marker-position opencode-session--input-marker))
+          (pos (point)))
+      (when (and (<= input-start pos) (<= pos input-end))
+        (save-excursion
+          ;; Scan backward from point for the nearest `@'
+          (let ((scan pos)
+                (found nil))
+            (while (and (> scan input-start) (not found))
+              (setq scan (1- scan))
+              (let ((ch (char-after scan)))
+                (cond
+                 ;; Hit whitespace before finding `@' — no valid trigger
+                 ((memq ch '(?\s ?\t ?\n))
+                  (setq scan input-start)) ; stop scanning
+                 ;; Found `@'
+                 ((eq ch ?@)
+                  ;; Verify the character before `@' is whitespace or start
+                  (let ((before-at (1- scan)))
+                    (when (or (<= scan input-start)
+                              (memq (char-after before-at) '(?\s ?\t ?\n)))
+                      (setq found scan)))))))
+            (when found
+              (cons (1+ found) pos))))))))
+
+(defun opencode-session--fetch-completable-agents (connection)
+  "Fetch and cache agents for CONNECTION, then re-trigger completion."
+  (let ((session-buffer (current-buffer)))
+    (opencode-client-agents
+     connection
+     :success (lambda (&rest args)
+                (let* ((data (plist-get args :data))
+                       (raw (opencode-session--normalize-agent-data data))
+                       (agents (opencode-session--normalize-agents data)))
+                  (setf (opencode-connection-agents connection) agents)
+                  (setf (opencode-connection-agents-raw connection) raw)
+                  (when (buffer-live-p session-buffer)
+                    (with-current-buffer session-buffer
+                      (opencode-session--apply-default-agent connection)
+                      (completion-at-point)))))
+     :error (lambda (&rest _args)
+              (message "OpenCode: failed to load agents")))))
+
+(defun opencode-session--complete-agent ()
+  "Return completion data for @-agent mentions."
+  (when-let ((bounds (opencode-session--agent-completion-bounds)))
+    (let* ((start (car bounds))
+           (end (cdr bounds))
+           (connection opencode-session--connection))
+      (when connection
+        (let ((raw (opencode-connection-agents-raw connection)))
+          (cond
+           ;; Agents not cached yet — trigger a fetch
+           ((null raw)
+            (opencode-session--fetch-completable-agents connection)
+            (message "OpenCode: loading agents")
+            nil)
+           ;; Agents available — return completion candidates
+           (t
+            (let ((names (opencode-session--completable-agent-names raw)))
+              (when names
                 (list start end names
                       :exclusive 'no
                       :company-prefix-length 0))))))))))

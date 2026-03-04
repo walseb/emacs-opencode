@@ -39,24 +39,48 @@ Most recently selected first.")
 
 ;;; Agent management
 
+(defun opencode-session--normalize-agent-data (data)
+  "Normalize raw agent DATA into a list of alists.
+Each element is an alist with at least `name' (or `id') and `mode' keys."
+  (let ((agents (cond
+                 ((vectorp data) (append data nil))
+                 ((listp data) data)
+                 (t nil))))
+    (cl-remove-if-not (lambda (agent)
+                        (or (stringp agent) (listp agent)))
+                      agents)))
+
+(defun opencode-session--agent-name (agent)
+  "Return the name string for AGENT.
+AGENT may be a string or an alist."
+  (cond
+   ((stringp agent) agent)
+   ((listp agent) (or (alist-get 'id agent)
+                      (alist-get 'name agent)))
+   (t nil)))
+
 (defun opencode-session--normalize-agents (data)
-  "Normalize agent list DATA into a list of names."
-  (let* ((agents (cond
-                  ((vectorp data) (append data nil))
-                  ((listp data) data)
-                  (t nil)))
+  "Normalize agent list DATA into a list of primary agent names."
+  (let* ((agents (opencode-session--normalize-agent-data data))
          (primary (cl-remove-if-not (lambda (agent)
                                       (or (stringp agent)
                                           (and (string= (alist-get 'mode agent) "primary")
                                                (not (alist-get 'hidden agent)))))
                                     agents))
-         (names (mapcar (lambda (agent)
-                          (cond
-                           ((stringp agent) agent)
-                           ((listp agent) (or (alist-get 'id agent)
-                                              (alist-get 'name agent)))
-                           (t nil)))
-                        primary)))
+         (names (mapcar #'opencode-session--agent-name primary)))
+    (delq nil names)))
+
+(defun opencode-session--completable-agent-names (data)
+  "Return a list of agent names suitable for @-mention completion from DATA.
+Includes non-hidden agents that are not in primary mode (i.e., subagents)."
+  (let* ((agents (opencode-session--normalize-agent-data data))
+         (completable (cl-remove-if-not
+                       (lambda (agent)
+                         (and (listp agent)
+                              (not (alist-get 'hidden agent))
+                              (not (string= (alist-get 'mode agent) "primary"))))
+                       agents))
+         (names (mapcar #'opencode-session--agent-name completable)))
     (delq nil names)))
 
 (defun opencode-session--maybe-fetch-agents (connection)
@@ -67,8 +91,10 @@ Most recently selected first.")
        connection
        :success (lambda (&rest args)
                   (let* ((data (plist-get args :data))
+                         (raw (opencode-session--normalize-agent-data data))
                          (agents (opencode-session--normalize-agents data)))
                     (setf (opencode-connection-agents connection) agents)
+                    (setf (opencode-connection-agents-raw connection) raw)
                     (when (buffer-live-p session-buffer)
                       (with-current-buffer session-buffer
                         (opencode-session--apply-default-agent connection)))))
@@ -99,12 +125,21 @@ Most recently selected first.")
 (defun opencode-session--refresh-agents (connection)
   "Refresh the cached agent list for CONNECTION."
   (setf (opencode-connection-agents connection) nil)
+  (setf (opencode-connection-agents-raw connection) nil)
   (opencode-session--maybe-fetch-agents connection))
 
 (defun opencode-session--available-agents ()
   "Return available agents for the current session buffer."
   (when opencode-session--connection
     (opencode-connection-agents opencode-session--connection)))
+
+(defun opencode-session--available-completable-agents ()
+  "Return agent names available for @-mention completion.
+These are non-hidden, non-primary agents (subagents)."
+  (when opencode-session--connection
+    (let ((raw (opencode-connection-agents-raw opencode-session--connection)))
+      (when raw
+        (opencode-session--completable-agent-names raw)))))
 
 (defun opencode-session--set-agent (agent index)
   "Set the current session agent to AGENT at INDEX."

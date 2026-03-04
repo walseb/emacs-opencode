@@ -189,6 +189,135 @@
     (should (eq (car result) 'message))
     (should (equal (cdr result) "hello !world"))))
 
+;;; extract-agent-mentions
+
+(ert-deftest test-opencode-session-mode/extract-mentions-single ()
+  "Extract a single @-mention."
+  (let ((opencode-session--connection
+         (opencode-connection-create :agents-raw
+          '(((id . "explore") (mode . "subagent") (hidden . nil))
+            ((id . "general") (mode . "subagent") (hidden . nil))))))
+    (should (equal (opencode-session--extract-agent-mentions "hello @explore")
+                   '("explore")))))
+
+(ert-deftest test-opencode-session-mode/extract-mentions-multiple ()
+  "Extract multiple @-mentions."
+  (let ((opencode-session--connection
+         (opencode-connection-create :agents-raw
+          '(((id . "explore") (mode . "subagent") (hidden . nil))
+            ((id . "general") (mode . "subagent") (hidden . nil))))))
+    (should (equal (opencode-session--extract-agent-mentions
+                    "@explore do this @general do that")
+                   '("explore" "general")))))
+
+(ert-deftest test-opencode-session-mode/extract-mentions-dedup ()
+  "Duplicate mentions are deduplicated."
+  (let ((opencode-session--connection
+         (opencode-connection-create :agents-raw
+          '(((id . "explore") (mode . "subagent") (hidden . nil))))))
+    (should (equal (opencode-session--extract-agent-mentions
+                    "@explore and @explore again")
+                   '("explore")))))
+
+(ert-deftest test-opencode-session-mode/extract-mentions-unknown-agent ()
+  "Unknown agent names are not extracted."
+  (let ((opencode-session--connection
+         (opencode-connection-create :agents-raw
+          '(((id . "explore") (mode . "subagent") (hidden . nil))))))
+    (should (null (opencode-session--extract-agent-mentions "hello @unknown")))))
+
+(ert-deftest test-opencode-session-mode/extract-mentions-no-at ()
+  "Input without @ returns empty list."
+  (let ((opencode-session--connection
+         (opencode-connection-create :agents-raw
+          '(((id . "explore") (mode . "subagent") (hidden . nil))))))
+    (should (null (opencode-session--extract-agent-mentions "hello world")))))
+
+(ert-deftest test-opencode-session-mode/extract-mentions-at-start ()
+  "Mention at the start of input is extracted."
+  (let ((opencode-session--connection
+         (opencode-connection-create :agents-raw
+          '(((id . "explore") (mode . "subagent") (hidden . nil))))))
+    (should (equal (opencode-session--extract-agent-mentions "@explore find files")
+                   '("explore")))))
+
+(ert-deftest test-opencode-session-mode/extract-mentions-mid-word ()
+  "@ embedded in a word (no preceding whitespace) is not extracted."
+  (let ((opencode-session--connection
+         (opencode-connection-create :agents-raw
+          '(((id . "explore") (mode . "subagent") (hidden . nil))))))
+    (should (null (opencode-session--extract-agent-mentions "email@explore")))))
+
+;;; build-message-parts
+
+(ert-deftest test-opencode-session-mode/build-parts-text-only ()
+  "Build parts with no mentions."
+  (let ((opencode-session--connection
+         (opencode-connection-create :agents-raw
+          '(((id . "explore") (mode . "subagent") (hidden . nil))))))
+    (let ((parts (opencode-session--build-message-parts "hello world")))
+      (should (= (length parts) 1))
+      (should (equal (cdr (assoc "type" (car parts))) "text"))
+      (should (equal (cdr (assoc "text" (car parts))) "hello world")))))
+
+(ert-deftest test-opencode-session-mode/build-parts-with-mention ()
+  "Build parts with an @-mention."
+  (let ((opencode-session--connection
+         (opencode-connection-create :agents-raw
+          '(((id . "explore") (mode . "subagent") (hidden . nil))))))
+    (let ((parts (opencode-session--build-message-parts "hello @explore")))
+      (should (= (length parts) 2))
+      (should (equal (cdr (assoc "type" (car parts))) "text"))
+      (should (equal (cdr (assoc "type" (cadr parts))) "agent"))
+      (should (equal (cdr (assoc "name" (cadr parts))) "explore")))))
+
+;;; agent-completion-bounds
+
+(ert-deftest test-opencode-session-mode/agent-bounds-at-trigger ()
+  "Detect @ at the start of input."
+  (with-temp-buffer
+    (opencode-session-mode)
+    (opencode-session--ensure-markers)
+    (opencode-session--ensure-input-region)
+    (goto-char (marker-position opencode-session--input-marker))
+    (insert "@expl")
+    (let ((bounds (opencode-session--agent-completion-bounds)))
+      (should bounds)
+      (should (= (car bounds)
+                 (1+ (marker-position opencode-session--input-start-marker))))
+      (should (= (cdr bounds) (point))))))
+
+(ert-deftest test-opencode-session-mode/agent-bounds-after-space ()
+  "Detect @ after a space in input."
+  (with-temp-buffer
+    (opencode-session-mode)
+    (opencode-session--ensure-markers)
+    (opencode-session--ensure-input-region)
+    (goto-char (marker-position opencode-session--input-marker))
+    (insert "hello @expl")
+    (let ((bounds (opencode-session--agent-completion-bounds)))
+      (should bounds))))
+
+(ert-deftest test-opencode-session-mode/agent-bounds-no-trigger ()
+  "Return nil when no @ is present."
+  (with-temp-buffer
+    (opencode-session-mode)
+    (opencode-session--ensure-markers)
+    (opencode-session--ensure-input-region)
+    (goto-char (marker-position opencode-session--input-marker))
+    (insert "hello world")
+    (should (null (opencode-session--agent-completion-bounds)))))
+
+(ert-deftest test-opencode-session-mode/agent-bounds-mid-word ()
+  "Return nil when @ is not preceded by whitespace."
+  (with-temp-buffer
+    (opencode-session-mode)
+    (opencode-session--ensure-markers)
+    (opencode-session--ensure-input-region)
+    (goto-char (marker-position opencode-session--input-marker))
+    (insert "email@expl")
+    (should (null (opencode-session--agent-completion-bounds)))))
+
 (provide 'emacs-opencode-session-mode-test)
 
 ;;; emacs-opencode-session-mode-test.el ends here

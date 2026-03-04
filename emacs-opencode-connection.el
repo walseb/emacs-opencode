@@ -15,6 +15,7 @@
   password
   timeout
   agents
+  agents-raw
   commands
   providers
   provider-catalog

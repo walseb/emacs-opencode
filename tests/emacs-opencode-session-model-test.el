@@ -164,6 +164,60 @@
                   "anthropic" "claude-3" nil)
                  "anthropic/claude-3")))
 
+;;; completable-agent-names
+
+(ert-deftest test-opencode-model/completable-agent-names-subagents ()
+  "Return non-hidden, non-primary agents."
+  (let ((data '(((id . "build") (mode . "primary") (hidden . nil))
+                ((id . "plan") (mode . "primary") (hidden . nil))
+                ((id . "general") (mode . "subagent") (hidden . nil))
+                ((id . "explore") (mode . "subagent") (hidden . nil))
+                ((id . "compaction") (mode . "primary") (hidden . t))
+                ((id . "title") (mode . "primary") (hidden . t)))))
+    (let ((result (opencode-session--completable-agent-names data)))
+      (should (member "general" result))
+      (should (member "explore" result))
+      (should-not (member "build" result))
+      (should-not (member "plan" result))
+      (should-not (member "compaction" result))
+      (should-not (member "title" result)))))
+
+(ert-deftest test-opencode-model/completable-agent-names-nil ()
+  "Return nil for nil data."
+  (should (null (opencode-session--completable-agent-names nil))))
+
+(ert-deftest test-opencode-model/completable-agent-names-vector ()
+  "Handle vector input."
+  (let ((data [((id . "explore") (mode . "subagent") (hidden . nil))]))
+    (should (equal (opencode-session--completable-agent-names data)
+                   '("explore")))))
+
+(ert-deftest test-opencode-model/completable-agent-names-all-mode ()
+  "Include agents with mode \"all\" that are not hidden."
+  (let ((data '(((id . "multi") (mode . "all") (hidden . nil)))))
+    (should (equal (opencode-session--completable-agent-names data)
+                   '("multi")))))
+
+;;; agent-name
+
+(ert-deftest test-opencode-model/agent-name-string ()
+  "Return string agent as-is."
+  (should (equal (opencode-session--agent-name "plan") "plan")))
+
+(ert-deftest test-opencode-model/agent-name-alist-with-id ()
+  "Extract id from alist agent."
+  (should (equal (opencode-session--agent-name '((id . "explore") (name . "Explorer")))
+                 "explore")))
+
+(ert-deftest test-opencode-model/agent-name-alist-name-fallback ()
+  "Fall back to name when id is absent."
+  (should (equal (opencode-session--agent-name '((name . "explore")))
+                 "explore")))
+
+(ert-deftest test-opencode-model/agent-name-nil ()
+  "Return nil for nil."
+  (should (null (opencode-session--agent-name nil))))
+
 ;;; provider-auth-methods
 
 (ert-deftest test-opencode-model/provider-auth-methods ()

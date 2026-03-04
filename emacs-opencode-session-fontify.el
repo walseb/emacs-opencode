@@ -150,6 +150,13 @@
   "Face for markdown horizontal rules."
   :group 'emacs-opencode)
 
+;;; Agent mention face
+
+(defface opencode-agent-mention-face
+  '((t :inherit font-lock-type-face :weight bold))
+  "Face used for @agent mentions in session messages."
+  :group 'emacs-opencode)
+
 ;;; Markdown regexes (adapted from markdown-mode)
 
 (defconst opencode-session--regex-code
@@ -575,7 +582,12 @@ Sets `match-data' group 0 to the matched region."
     (opencode-session--match-italic
      (1 'opencode-markdown-markup-face prepend)
      (2 'opencode-markdown-italic-face append)
-     (3 'opencode-markdown-markup-face prepend)))
+     (3 'opencode-markdown-markup-face prepend))
+
+    ;; @agent mentions: @name preceded by whitespace or start of line
+    (,(opencode-session--make-text-matcher
+       "\\(?:^\\|[[:space:]]\\)\\(@[a-zA-Z0-9_-]+\\)")
+     (1 'opencode-agent-mention-face prepend)))
   "Font-lock keywords for markdown syntax in text part regions.")
 
 ;;; Code block fontification

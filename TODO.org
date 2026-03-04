@@ -3,11 +3,12 @@
 * TODO fix issue where you can't scroll around when a response is streaming in
 * IN PROGRESS completion-at-point in session buffer input
 - slash commands
-- @agent, once @-mentioning agents is supported
+- @agent
 - file paths, once @file is supported
  - completion providers should be pluggable so new triggers (@agent, @file, !shell) can be added
  - slash completion only triggers when the input begins with optional whitespace followed by "/"
-* TODO Support @-mentionig agents
+* DONE Support @-mentioning agents
+CLOSED: [2026-03-04 Wed]
 * TODO Support @file mentions (inlines file contents into prompt)
 * TODO Fix unclear wording for permission requests
 E.g. "OpenCode wants to rg foobar .*" or "OpenCode wants to foo/bar/baz.txt". What do those mean?
