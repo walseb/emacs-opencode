@@ -160,6 +160,67 @@
     (should (null (opencode-sse--read-state conn :data)))
     (should (null (opencode-sse--read-state conn :skipping)))))
 
+(ert-deftest test-opencode-sse/skip-fast-path-discards-subsequent-chunks ()
+  "Subsequent chunks of a skipped event are discarded without splitting."
+  (let ((opencode-sse--handlers nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    ;; First chunk: triggers skip on an unhandled event type.
+    ;; No terminating \n\n -- the event continues.
+    (opencode-sse--process-chunk
+     conn
+     "data: {\"type\":\"session.diff\",\"patch\":[{\"op\":\"replace\"\n")
+    (should (opencode-sse--read-state conn :skipping))
+    ;; :buffer is "\n" (seeded so the fast path can detect a boundary
+    ;; that starts at the beginning of the very next chunk).
+    (should (equal (opencode-sse--read-state conn :buffer) "\n"))
+    ;; Subsequent chunks are discarded entirely by the fast path.
+    (opencode-sse--process-chunk conn ",\"path\":\"/files\",\"value\":\"")
+    (should (opencode-sse--read-state conn :skipping))
+    (should (null (opencode-sse--read-state conn :data)))
+    (opencode-sse--process-chunk conn "...more huge diff data...")
+    (should (opencode-sse--read-state conn :skipping))))
+
+(ert-deftest test-opencode-sse/skip-fast-path-resumes-on-boundary ()
+  "Fast path detects event boundary and processes the next event."
+  (let ((opencode-sse--handlers nil)
+        (dispatched nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler
+     "message.created"
+     (lambda (_event data)
+       (setq dispatched data)))
+    ;; First chunk: triggers skip.
+    (opencode-sse--process-chunk
+     conn
+     "data: {\"type\":\"session.diff\",\"big\":true}\n")
+    (should (opencode-sse--read-state conn :skipping))
+    ;; Second chunk: contains the boundary (\n\n) ending the skipped
+    ;; event, followed by the start of a handled event.
+    (opencode-sse--process-chunk
+     conn
+     "\ndata: {\"type\":\"message.created\",\"id\":7}\n\n")
+    (should-not (opencode-sse--read-state conn :skipping))
+    (should dispatched)
+    (should (equal (alist-get 'id dispatched) 7))))
+
+(ert-deftest test-opencode-sse/skip-fast-path-boundary-only-chunk ()
+  "A chunk containing just the event boundary correctly ends skip."
+  (let ((opencode-sse--handlers nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    ;; Enter skip mode.
+    (opencode-sse--process-chunk
+     conn
+     "data: {\"type\":\"session.diff\",\"x\":1}\n")
+    (should (opencode-sse--read-state conn :skipping))
+    ;; Chunk with just the boundary.
+    (opencode-sse--process-chunk conn "\n")
+    ;; Skip should be cleared.
+    (should-not (opencode-sse--read-state conn :skipping))
+    (should (null (opencode-sse--read-state conn :data)))))
+
 (ert-deftest test-opencode-sse/process-chunk-strips-cr ()
   "Carriage returns in SSE lines are stripped."
   (let ((opencode-sse--handlers nil)

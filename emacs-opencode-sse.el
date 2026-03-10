@@ -204,14 +204,52 @@ Returns the type string, or nil if it cannot be extracted."
         (_ nil))))))
 
 (defun opencode-sse--process-chunk (connection chunk)
-  "Process SSE CHUNK for CONNECTION."
-  (let* ((buffer (concat (opencode-sse--read-state connection :buffer) chunk))
-         (lines (split-string buffer "\n"))
-         (incomplete (car (last lines)))
-         (complete-lines (butlast lines)))
-    (opencode-sse--write-state connection :buffer incomplete)
-    (dolist (line complete-lines)
-      (opencode-sse--process-line connection (string-trim-right line "\r")))))
+  "Process SSE CHUNK for CONNECTION.
+
+When skipping an unhandled event, bypass all line splitting and
+string accumulation.  Instead scan the raw CHUNK for the SSE event
+boundary (a blank line, i.e. \\n\\n) to detect when the skipped
+event ends."
+  (if (opencode-sse--read-state connection :skipping)
+      ;; Fast path: skip all processing, just scan for event boundary.
+      ;; Prepend :buffer (at most a few bytes left over from the
+      ;; split-string that detected the skip) so that a boundary
+      ;; spanning the transition into skip mode is still found.
+      (let* ((pending (opencode-sse--read-state connection :buffer))
+             (haystack (if (string-empty-p pending)
+                           chunk
+                         (concat pending chunk)))
+             (boundary (string-match "\n\n" haystack)))
+        (if boundary
+            ;; Event boundary found -- the skipped event is over.
+            ;; Extract everything after the boundary and process it
+            ;; through the normal path (it may contain the next event).
+            (let ((rest (substring haystack (+ boundary 2))))
+              (opencode-sse--clear-event connection)
+              (opencode-sse--write-state connection :buffer "")
+              (unless (string-empty-p rest)
+                (opencode-sse--process-chunk connection rest)))
+          ;; No boundary yet -- discard chunk entirely.
+          ;; Keep only a trailing "\n" so a boundary split across two
+          ;; chunks (...\n | \n...) is detected on the next call.
+          (opencode-sse--write-state connection :buffer
+                                      (if (string-suffix-p "\n" chunk)
+                                          "\n"
+                                        ""))))
+    ;; Normal path: split into lines and process each.
+    (let* ((buffer (concat (opencode-sse--read-state connection :buffer) chunk))
+           (lines (split-string buffer "\n"))
+           (incomplete (car (last lines)))
+           (complete-lines (butlast lines)))
+      (opencode-sse--write-state connection :buffer incomplete)
+      (dolist (line complete-lines)
+        (opencode-sse--process-line connection (string-trim-right line "\r")))
+      ;; If :skipping was set during the dolist, seed :buffer with
+      ;; "\n" so the fast path can detect a boundary that starts in
+      ;; the very next chunk.  split-string consumed the trailing \n
+      ;; of the data line that triggered the skip, so we restore it.
+      (when (opencode-sse--read-state connection :skipping)
+        (opencode-sse--write-state connection :buffer "\n")))))
 
 (defun opencode-sse-open (connection)
   "Open an SSE stream for CONNECTION.
