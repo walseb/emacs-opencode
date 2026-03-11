@@ -71,18 +71,20 @@
   "Read and write SSE parse state."
   (let ((conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (should (equal (opencode-sse--read-state conn :buffer) ""))
-    (opencode-sse--write-state conn :buffer "partial")
-    (should (equal (opencode-sse--read-state conn :buffer) "partial"))))
+    (should (null (opencode-sse--read-state conn :buffer)))
+    (opencode-sse--write-state conn :buffer '("partial"))
+    (should (equal (opencode-sse--read-state conn :buffer) '("partial")))))
 
 (ert-deftest test-opencode-sse/append-data ()
-  "Append data lines with newline separator."
+  "Append data lines stored as a reverse list."
   (let ((conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
     (opencode-sse--append-data conn "line1")
-    (should (equal (opencode-sse--read-state conn :data) "line1"))
+    (should (equal (opencode-sse--read-state conn :data) '("line1")))
     (opencode-sse--append-data conn "line2")
-    (should (equal (opencode-sse--read-state conn :data) "line1\nline2"))))
+    (should (equal (opencode-sse--read-state conn :data) '("line2" "line1")))
+    ;; join-data returns them in original order
+    (should (equal (opencode-sse--join-data conn) "line1\nline2"))))
 
 (ert-deftest test-opencode-sse/clear-event ()
   "Clear event resets data and skipping."
@@ -104,7 +106,7 @@
     (should (null (opencode-sse--read-state conn :data)))))
 
 (ert-deftest test-opencode-sse/process-line-data-accumulates ()
-  "Data lines accumulate in state."
+  "Data lines accumulate in state as a list."
   (let ((conn (opencode-connection-create))
         (opencode-sse--handlers nil))
     (opencode-sse--initialize-state conn)
@@ -112,7 +114,7 @@
     (opencode-sse-register-handler "test.event" (lambda (_e _d)))
     (opencode-sse--process-line conn "data: {\"type\":\"test.event\",\"a\":1}")
     (should (equal (opencode-sse--read-state conn :data)
-                   "{\"type\":\"test.event\",\"a\":1}"))))
+                   '("{\"type\":\"test.event\",\"a\":1}")))))
 
 (ert-deftest test-opencode-sse/process-chunk-complete-event ()
   "A complete SSE event dispatches to the handler."
@@ -171,9 +173,9 @@
      conn
      "data: {\"type\":\"session.diff\",\"patch\":[{\"op\":\"replace\"\n")
     (should (opencode-sse--read-state conn :skipping))
-    ;; :buffer is "\n" (seeded so the fast path can detect a boundary
+    ;; :buffer is ("\n") (seeded so the fast path can detect a boundary
     ;; that starts at the beginning of the very next chunk).
-    (should (equal (opencode-sse--read-state conn :buffer) "\n"))
+    (should (equal (opencode-sse--read-state conn :buffer) '("\n")))
     ;; Subsequent chunks are discarded entirely by the fast path.
     (opencode-sse--process-chunk conn ",\"path\":\"/files\",\"value\":\"")
     (should (opencode-sse--read-state conn :skipping))
@@ -243,9 +245,154 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler "sp.test" (lambda (_e _d)))
     (opencode-sse--process-line conn "data:  {\"type\":\"sp.test\"}")
-    ;; One leading space stripped, one remains
+    ;; One leading space stripped, one remains; stored as list
     (should (equal (opencode-sse--read-state conn :data)
-                   " {\"type\":\"sp.test\"}"))))
+                   '(" {\"type\":\"sp.test\"}")))))
+
+;;; chunk-list accumulation (large payload performance)
+
+(ert-deftest test-opencode-sse/chunk-accumulation-no-newline ()
+  "Chunks without newlines accumulate as a list without concatenation."
+  (let ((opencode-sse--handlers nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    ;; Simulate a large data line arriving in multiple chunks with no newlines.
+    (opencode-sse--process-chunk conn "data: {\"type\":\"msg")
+    (should (equal (opencode-sse--read-state conn :buffer)
+                   '("data: {\"type\":\"msg")))
+    (opencode-sse--process-chunk conn ".updated\",\"big\":\"")
+    (should (equal (opencode-sse--read-state conn :buffer)
+                   '("data: {\"type\":\"msg" ".updated\",\"big\":\"")))
+    (opencode-sse--process-chunk conn "payload\"}")
+    (should (equal (opencode-sse--read-state conn :buffer)
+                   '("data: {\"type\":\"msg" ".updated\",\"big\":\"" "payload\"}")))))
+
+(ert-deftest test-opencode-sse/chunk-accumulation-then-newline ()
+  "Accumulated chunks are joined and processed when a newline arrives."
+  (let ((opencode-sse--handlers nil)
+        (dispatched nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler
+     "msg.updated"
+     (lambda (_event data) (setq dispatched data)))
+    ;; Three chunks without newlines.
+    (opencode-sse--process-chunk conn "data: {\"type\":\"msg")
+    (opencode-sse--process-chunk conn ".updated\",\"x\":")
+    (opencode-sse--process-chunk conn "99}")
+    (should (null dispatched))
+    ;; Newline + blank line to finalize the event.
+    (opencode-sse--process-chunk conn "\n\n")
+    (should dispatched)
+    (should (equal (alist-get 'x dispatched) 99))))
+
+(ert-deftest test-opencode-sse/chunk-accumulation-many-chunks ()
+  "A large number of small chunks accumulate correctly."
+  (let ((opencode-sse--handlers nil)
+        (dispatched nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler
+     "big.event"
+     (lambda (_event data) (setq dispatched data)))
+    ;; Simulate 100 small chunks building up a data line.
+    (opencode-sse--process-chunk conn "data: {\"type\":\"big.event\",\"v\":\"")
+    (dotimes (_ 100)
+      (opencode-sse--process-chunk conn "x"))
+    (opencode-sse--process-chunk conn "\"}\n\n")
+    (should dispatched)
+    (should (= (length (alist-get 'v dispatched)) 100))))
+
+(ert-deftest test-opencode-sse/chunk-newline-mid-chunk ()
+  "A chunk containing a newline in the middle correctly splits."
+  (let ((opencode-sse--handlers nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler "mid.test" (lambda (_e _d)))
+    ;; First chunk has no newline.
+    (opencode-sse--process-chunk conn "data: {\"type\":\"mid.t")
+    (should (equal (opencode-sse--read-state conn :buffer)
+                   '("data: {\"type\":\"mid.t")))
+    ;; Second chunk completes the line and starts accumulating.
+    (opencode-sse--process-chunk conn "est\",\"a\":1}\ndata: more")
+    ;; The complete data line should be in :data, and "data: more"
+    ;; should be the new incomplete buffer fragment.
+    (should (equal (opencode-sse--read-state conn :data)
+                   '("{\"type\":\"mid.test\",\"a\":1}")))
+    (should (equal (opencode-sse--read-state conn :buffer)
+                   '("data: more")))))
+
+(ert-deftest test-opencode-sse/chunk-buffer-empty-after-complete-line ()
+  "Buffer is nil when a chunk ends exactly at a newline boundary."
+  (let ((opencode-sse--handlers nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler "exact.test" (lambda (_e _d)))
+    ;; Chunk ends exactly with \n -- no trailing fragment.
+    (opencode-sse--process-chunk conn "data: {\"type\":\"exact.test\"}\n")
+    (should (null (opencode-sse--read-state conn :buffer)))
+    (should (equal (opencode-sse--read-state conn :data)
+                   '("{\"type\":\"exact.test\"}")))))
+
+(ert-deftest test-opencode-sse/join-buffer-helper ()
+  "The join-buffer helper produces the correct concatenation."
+  (let ((conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    ;; Empty buffer.
+    (should (equal (opencode-sse--join-buffer conn) ""))
+    ;; Single fragment.
+    (opencode-sse--write-state conn :buffer '("hello"))
+    (should (equal (opencode-sse--join-buffer conn) "hello"))
+    ;; Multiple fragments.
+    (opencode-sse--write-state conn :buffer '("foo" "bar" "baz"))
+    (should (equal (opencode-sse--join-buffer conn) "foobarbaz"))))
+
+(ert-deftest test-opencode-sse/join-data-helper ()
+  "The join-data helper joins lines with newlines."
+  (let ((conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    ;; Empty data.
+    (should (null (opencode-sse--join-data conn)))
+    ;; Data is stored in reverse order by append-data.
+    (opencode-sse--append-data conn "line1")
+    (opencode-sse--append-data conn "line2")
+    (should (equal (opencode-sse--join-data conn) "line1\nline2"))))
+
+(ert-deftest test-opencode-sse/multi-line-data-event ()
+  "Multi-line SSE data events are joined correctly at dispatch."
+  (let ((opencode-sse--handlers nil)
+        (dispatched nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler
+     "multi.line"
+     (lambda (_event data) (setq dispatched data)))
+    ;; SSE spec: multiple data: fields are joined with \n.
+    (opencode-sse--process-chunk
+     conn
+     "data: {\"type\":\"multi.line\",\ndata: \"val\":42}\n\n")
+    (should dispatched)
+    (should (equal (alist-get 'val dispatched) 42))))
+
+(ert-deftest test-opencode-sse/skip-to-normal-transition-buffer-format ()
+  "Transition from skip to normal mode produces correct buffer format."
+  (let ((opencode-sse--handlers nil)
+        (dispatched nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler
+     "after.skip"
+     (lambda (_event data) (setq dispatched data)))
+    ;; Enter skip mode.
+    (opencode-sse--process-chunk
+     conn "data: {\"type\":\"no.handler\"}\n")
+    (should (opencode-sse--read-state conn :skipping))
+    ;; Boundary + start of next event in one chunk.
+    (opencode-sse--process-chunk
+     conn "\ndata: {\"type\":\"after.skip\",\"ok\":true}\n\n")
+    (should-not (opencode-sse--read-state conn :skipping))
+    (should dispatched)
+    (should (equal (alist-get 'ok dispatched) t))))
 
 ;;; handler registration
 

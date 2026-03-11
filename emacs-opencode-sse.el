@@ -119,7 +119,7 @@ Signals an error when DATA is not valid JSON."
 (defun opencode-sse--initialize-state (connection)
   "Initialize SSE parse state on CONNECTION."
   (setf (opencode-connection-sse-state connection)
-        (list :buffer "" :data nil :skipping nil)))
+        (list :buffer nil :data nil :skipping nil)))
 
 (defun opencode-sse--ensure-state (connection)
   "Return the SSE parser state for CONNECTION."
@@ -143,10 +143,26 @@ Signals an error when DATA is not valid JSON."
   (opencode-sse--write-state connection :skipping nil))
 
 (defun opencode-sse--append-data (connection value)
-  "Append VALUE to CONNECTION SSE data field."
+  "Append VALUE to the CONNECTION SSE data list.
+Each call pushes VALUE onto a list stored in reverse order.
+Use `opencode-sse--join-data' to retrieve the final string."
   (let ((current (opencode-sse--read-state connection :data)))
-    (opencode-sse--write-state connection :data
-                               (if current (concat current "\n" value) value))))
+    (opencode-sse--write-state connection :data (cons value current))))
+
+(defun opencode-sse--join-data (connection)
+  "Return the accumulated SSE data for CONNECTION as a single string.
+Data lines are joined with newlines per the SSE spec."
+  (let ((parts (opencode-sse--read-state connection :data)))
+    (when parts
+      (mapconcat #'identity (nreverse parts) "\n"))))
+
+(defun opencode-sse--join-buffer (connection)
+  "Return the accumulated buffer fragments for CONNECTION as a single string.
+Buffer fragments are stored in forward order (unlike data which is reversed)."
+  (let ((parts (opencode-sse--read-state connection :buffer)))
+    (if parts
+        (apply #'concat parts)
+      "")))
 
 (defun opencode-sse--extract-event-type (data)
   "Extract the event type from raw SSE DATA without JSON parsing.
@@ -159,10 +175,12 @@ Returns the type string, or nil if it cannot be extracted."
   (if (opencode-sse--read-state connection :skipping)
       ;; We were skipping an unhandled event; just reset state.
       (opencode-sse--clear-event connection)
-    (let ((data (opencode-sse--read-state connection :data)))
+    (let ((parts (opencode-sse--read-state connection :data)))
       (opencode-sse--clear-event connection)
-      (when data
-        (let ((event (opencode-sse--extract-event-type data)))
+      (when parts
+        ;; Join the accumulated data lines into a single string.
+        (let* ((data (mapconcat #'identity (nreverse parts) "\n"))
+               (event (opencode-sse--extract-event-type data)))
           (unless event
             (error "OpenCode SSE payload missing type field"))
           ;; Only JSON-parse events that have registered handlers
@@ -206,17 +224,21 @@ Returns the type string, or nil if it cannot be extracted."
 (defun opencode-sse--process-chunk (connection chunk)
   "Process SSE CHUNK for CONNECTION.
 
+The parser accumulates incomplete line fragments in :buffer as a
+list of string chunks (in order) to avoid O(n²) re-concatenation
+when a single SSE data line is very large.  A full concat + split
+only happens when CHUNK actually contains a newline.
+
 When skipping an unhandled event, bypass all line splitting and
 string accumulation.  Instead scan the raw CHUNK for the SSE event
 boundary (a blank line, i.e. \\n\\n) to detect when the skipped
 event ends."
   (if (opencode-sse--read-state connection :skipping)
       ;; Fast path: skip all processing, just scan for event boundary.
-      ;; Prepend :buffer (at most a few bytes left over from the
-      ;; split-string that detected the skip) so that a boundary
-      ;; spanning the transition into skip mode is still found.
-      (let* ((pending (opencode-sse--read-state connection :buffer))
-             (haystack (if (string-empty-p pending)
+      ;; :buffer in skip mode is a short string (at most "\n") stored
+      ;; as a one-element list, so flatten it cheaply.
+      (let* ((pending (car (opencode-sse--read-state connection :buffer)))
+             (haystack (if (or (null pending) (string-empty-p pending))
                            chunk
                          (concat pending chunk)))
              (boundary (string-match "\n\n" haystack)))
@@ -226,7 +248,7 @@ event ends."
             ;; through the normal path (it may contain the next event).
             (let ((rest (substring haystack (+ boundary 2))))
               (opencode-sse--clear-event connection)
-              (opencode-sse--write-state connection :buffer "")
+              (opencode-sse--write-state connection :buffer nil)
               (unless (string-empty-p rest)
                 (opencode-sse--process-chunk connection rest)))
           ;; No boundary yet -- discard chunk entirely.
@@ -234,22 +256,41 @@ event ends."
           ;; chunks (...\n | \n...) is detected on the next call.
           (opencode-sse--write-state connection :buffer
                                       (if (string-suffix-p "\n" chunk)
-                                          "\n"
-                                        ""))))
-    ;; Normal path: split into lines and process each.
-    (let* ((buffer (concat (opencode-sse--read-state connection :buffer) chunk))
-           (lines (split-string buffer "\n"))
-           (incomplete (car (last lines)))
-           (complete-lines (butlast lines)))
-      (opencode-sse--write-state connection :buffer incomplete)
-      (dolist (line complete-lines)
-        (opencode-sse--process-line connection (string-trim-right line "\r")))
-      ;; If :skipping was set during the dolist, seed :buffer with
-      ;; "\n" so the fast path can detect a boundary that starts in
-      ;; the very next chunk.  split-string consumed the trailing \n
-      ;; of the data line that triggered the skip, so we restore it.
-      (when (opencode-sse--read-state connection :skipping)
-        (opencode-sse--write-state connection :buffer "\n")))))
+                                          '("\n")
+                                        nil))))
+    ;; Normal path: accumulate chunks and process complete lines.
+    (if (not (string-search "\n" chunk))
+        ;; No newline in this chunk -- just accumulate the fragment.
+        ;; This is O(1) and avoids re-scanning or re-concatenating
+        ;; the entire accumulated buffer.
+        (let ((parts (opencode-sse--read-state connection :buffer)))
+          (if parts
+              ;; nconc appends in place -- the state plist already
+              ;; holds this list, so no write-state needed.
+              (nconc parts (list chunk))
+            (opencode-sse--write-state connection :buffer (list chunk))))
+      ;; Newline found -- join all accumulated fragments with this
+      ;; chunk, split into lines, and process the complete ones.
+      (let* ((parts (opencode-sse--read-state connection :buffer))
+             (full (if parts
+                       (apply #'concat (nconc parts (list chunk)))
+                     chunk))
+             (lines (split-string full "\n"))
+             (incomplete (car (last lines)))
+             (complete-lines (butlast lines)))
+        (opencode-sse--write-state connection :buffer
+                                    (if (string-empty-p incomplete)
+                                        nil
+                                      (list incomplete)))
+        (dolist (line complete-lines)
+          (opencode-sse--process-line
+           connection (string-trim-right line "\r")))
+        ;; If :skipping was set during the dolist, seed :buffer with
+        ;; "\n" so the fast path can detect a boundary that starts in
+        ;; the very next chunk.  split-string consumed the trailing \n
+        ;; of the data line that triggered the skip, so we restore it.
+        (when (opencode-sse--read-state connection :skipping)
+          (opencode-sse--write-state connection :buffer '("\n")))))))
 
 (defun opencode-sse-open (connection)
   "Open an SSE stream for CONNECTION.
