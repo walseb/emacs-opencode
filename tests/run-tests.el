@@ -8,6 +8,7 @@
 (require 'emacs-opencode-connection-test)
 (require 'emacs-opencode-client-test)
 (require 'emacs-opencode-sse-test)
+(require 'emacs-opencode-sse-profile-test)
 (require 'emacs-opencode-message-test)
 (require 'emacs-opencode-session-test)
 (require 'emacs-opencode-session-vars-test)

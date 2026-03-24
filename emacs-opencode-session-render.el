@@ -8,6 +8,7 @@
 (require 'emacs-opencode-connection)
 (require 'emacs-opencode-session)
 (require 'emacs-opencode-session-fontify)
+(require 'emacs-opencode-sse-profile)
 
 (declare-function opencode--ensure-session-buffer "emacs-opencode")
 
@@ -163,8 +164,13 @@ Only includes string, number, and boolean values."
 
 (defun opencode-session--render-message (message)
   "Render MESSAGE into the buffer."
-  (let ((text (opencode-session--message-text message)))
-    (opencode-session--replace-message message text nil)))
+  (let ((render-start (and opencode-sse-profile-enabled
+                           (opencode-sse-profile--now))))
+    (let ((text (opencode-session--message-text message)))
+      (opencode-session--replace-message message text nil))
+    (when render-start
+      (opencode-sse-profile-add-render-time
+       (opencode-sse-profile--elapsed-ms render-start)))))
 
 (defun opencode-session--replace-message (message text face)
   "Replace MESSAGE region with TEXT using FACE."

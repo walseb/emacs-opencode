@@ -4,6 +4,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'emacs-opencode-connection)
+(require 'emacs-opencode-sse-profile)
 
 (defun opencode--json-read ()
   "Read JSON from the current buffer with JSON false mapped to nil."
@@ -140,7 +141,11 @@ Signals an error when DATA is not valid JSON."
 (defun opencode-sse--clear-event (connection)
   "Reset event fields in CONNECTION SSE state."
   (opencode-sse--write-state connection :data nil)
-  (opencode-sse--write-state connection :skipping nil))
+  (opencode-sse--write-state connection :skipping nil)
+  (opencode-sse--write-state connection :skip-event-type nil)
+  (opencode-sse--write-state connection :skip-bytes nil)
+  (opencode-sse--write-state connection :in-flight-event nil)
+  (opencode-sse--write-state connection :in-flight-bytes 0))
 
 (defun opencode-sse--append-data (connection value)
   "Append VALUE to the CONNECTION SSE data list.
@@ -174,19 +179,34 @@ Returns the type string, or nil if it cannot be extracted."
   "Finalize and dispatch event from CONNECTION SSE state."
   (if (opencode-sse--read-state connection :skipping)
       ;; We were skipping an unhandled event; just reset state.
-      (opencode-sse--clear-event connection)
+      (progn
+        (when opencode-sse-profile-enabled
+          (let ((skip-bytes (opencode-sse--read-state connection :skip-bytes)))
+            (when-let ((event-type (opencode-sse--read-state connection :skip-event-type)))
+              (opencode-sse-profile--record-skip event-type (or skip-bytes 0)))))
+        (opencode-sse--clear-event connection))
     (let ((parts (opencode-sse--read-state connection :data)))
       (opencode-sse--clear-event connection)
       (when parts
         ;; Join the accumulated data lines into a single string.
         (let* ((data (mapconcat #'identity (nreverse parts) "\n"))
-               (event (opencode-sse--extract-event-type data)))
+               (event (opencode-sse--extract-event-type data))
+               (data-bytes (string-bytes data)))
           (unless event
             (error "OpenCode SSE payload missing type field"))
           ;; Only JSON-parse events that have registered handlers
           (when (alist-get event opencode-sse--handlers nil nil #'string=)
-            (let ((payload (opencode-sse--decode-data data)))
-              (opencode-sse--dispatch event payload))))))))
+            (if opencode-sse-profile-enabled
+                (let* ((parse-start (opencode-sse-profile--now))
+                       (payload (opencode-sse--decode-data data))
+                       (parse-ms (opencode-sse-profile--elapsed-ms parse-start))
+                       (dispatch-start (opencode-sse-profile--now)))
+                  (opencode-sse--dispatch event payload)
+                  (let ((dispatch-ms (opencode-sse-profile--elapsed-ms dispatch-start)))
+                    (opencode-sse-profile--record-finalize
+                     event parse-ms dispatch-ms data-bytes)))
+              (let ((payload (opencode-sse--decode-data data)))
+                (opencode-sse--dispatch event payload)))))))))
 
 (defun opencode-sse--process-line (connection line)
   "Process LINE in SSE parser CONNECTION state."
@@ -208,17 +228,32 @@ Returns the type string, or nil if it cannot be extracted."
           ;; Already skipping an unhandled event -- do nothing.
           ((opencode-sse--read-state connection :skipping) nil)
           ;; First data line of a new event -- check if we should skip.
-          ((null (opencode-sse--read-state connection :data))
-           (let ((event-type (opencode-sse--extract-event-type value)))
-             (if (and event-type
-                      (null (alist-get event-type opencode-sse--handlers
-                                       nil nil #'string=)))
-                 ;; No handler registered; skip the rest of this event.
-                 (opencode-sse--write-state connection :skipping t)
-               ;; Has a handler (or type unknown); accumulate normally.
-               (opencode-sse--append-data connection value))))
+           ((null (opencode-sse--read-state connection :data))
+            (let ((event-type (opencode-sse--extract-event-type value)))
+              (if (and event-type
+                       (null (alist-get event-type opencode-sse--handlers
+                                        nil nil #'string=)))
+                  ;; No handler registered; skip the rest of this event.
+                  (progn
+                    (opencode-sse--write-state connection :skipping t)
+                    (when opencode-sse-profile-enabled
+                      (opencode-sse--write-state connection :skip-event-type event-type)
+                      (opencode-sse--write-state connection :skip-bytes
+                                                  (string-bytes value))))
+                ;; Has a handler (or type unknown); accumulate normally.
+                (when opencode-sse-profile-enabled
+                  (opencode-sse--write-state connection :in-flight-event
+                                              (or event-type "(unknown)"))
+                  (opencode-sse--write-state connection :in-flight-bytes
+                                              (string-bytes value)))
+                (opencode-sse--append-data connection value))))
           ;; Subsequent data line of a handled event -- accumulate.
-          (t (opencode-sse--append-data connection value))))
+          (t
+           (when opencode-sse-profile-enabled
+             (let ((prev (or (opencode-sse--read-state connection :in-flight-bytes) 0)))
+               (opencode-sse--write-state connection :in-flight-bytes
+                                           (+ prev (string-bytes value)))))
+           (opencode-sse--append-data connection value))))
         (_ nil))))))
 
 (defun opencode-sse--process-chunk (connection chunk)
@@ -233,6 +268,29 @@ When skipping an unhandled event, bypass all line splitting and
 string accumulation.  Instead scan the raw CHUNK for the SSE event
 boundary (a blank line, i.e. \\n\\n) to detect when the skipped
 event ends."
+  (let ((sse-profile--chunk-start
+         (and opencode-sse-profile-enabled (opencode-sse-profile--now)))
+        (sse-profile--chunk-skipping
+         (opencode-sse--read-state connection :skipping))
+        (sse-profile--in-flight-event
+         (and opencode-sse-profile-enabled
+              (or (opencode-sse--read-state connection :skip-event-type)
+                  (opencode-sse--read-state connection :in-flight-event))))
+        (sse-profile--in-flight-bytes
+         (and opencode-sse-profile-enabled
+              (or (opencode-sse--read-state connection :skip-bytes)
+                  (opencode-sse--read-state connection :in-flight-bytes)))))
+    (opencode-sse--process-chunk-1 connection chunk)
+    (when sse-profile--chunk-start
+      (opencode-sse-profile--record-chunk
+       (opencode-sse-profile--elapsed-ms sse-profile--chunk-start)
+       (string-bytes chunk)
+       sse-profile--chunk-skipping
+       sse-profile--in-flight-event
+       (or sse-profile--in-flight-bytes 0)))))
+
+(defun opencode-sse--process-chunk-1 (connection chunk)
+  "Internal: process SSE CHUNK for CONNECTION without profiling wrapper."
   (if (opencode-sse--read-state connection :skipping)
       ;; Fast path: skip all processing, just scan for event boundary.
       ;; :buffer in skip mode is a short string (at most "\n") stored
@@ -242,6 +300,11 @@ event ends."
                            chunk
                          (concat pending chunk)))
              (boundary (string-match "\n\n" haystack)))
+        ;; Accumulate skip bytes for profiling
+        (when opencode-sse-profile-enabled
+          (let ((prev (or (opencode-sse--read-state connection :skip-bytes) 0)))
+            (opencode-sse--write-state connection :skip-bytes
+                                        (+ prev (string-bytes chunk)))))
         (if boundary
             ;; Event boundary found -- the skipped event is over.
             ;; Extract everything after the boundary and process it
