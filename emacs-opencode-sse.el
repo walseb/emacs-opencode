@@ -163,10 +163,10 @@ Data lines are joined with newlines per the SSE spec."
 
 (defun opencode-sse--join-buffer (connection)
   "Return the accumulated buffer fragments for CONNECTION as a single string.
-Buffer fragments are stored in forward order (unlike data which is reversed)."
+Buffer fragments are stored in reverse order and joined with `nreverse'."
   (let ((parts (opencode-sse--read-state connection :buffer)))
     (if parts
-        (apply #'concat parts)
+        (apply #'concat (reverse parts))
       "")))
 
 (defun opencode-sse--extract-event-type (data)
@@ -324,19 +324,44 @@ event ends."
     ;; Normal path: accumulate chunks and process complete lines.
     (if (not (string-search "\n" chunk))
         ;; No newline in this chunk -- just accumulate the fragment.
-        ;; This is O(1) and avoids re-scanning or re-concatenating
-        ;; the entire accumulated buffer.
+        ;; Fragments are stored in reverse order (push to front) so
+        ;; accumulation is always O(1).  They are reversed when joined.
         (let ((parts (opencode-sse--read-state connection :buffer)))
           (if parts
-              ;; nconc appends in place -- the state plist already
-              ;; holds this list, so no write-state needed.
-              (nconc parts (list chunk))
-            (opencode-sse--write-state connection :buffer (list chunk))))
+              (opencode-sse--write-state connection :buffer (cons chunk parts))
+            ;; First fragment of a potential new event.  If it starts
+            ;; with "data: " we can peek at the event type and enter
+            ;; skip mode immediately, avoiding accumulation of large
+            ;; payloads that have no registered handler.
+            (let ((value nil)
+                  (event-type nil))
+              (when (string-prefix-p "data: " chunk)
+                (setq value (substring chunk 6))
+                (setq event-type (opencode-sse--extract-event-type value)))
+              (if (and event-type
+                       (null (alist-get event-type opencode-sse--handlers
+                                        nil nil #'string=)))
+                  ;; No handler -- enter skip mode, discard chunk.
+                  (progn
+                    (opencode-sse--write-state connection :skipping t)
+                    (opencode-sse--write-state connection :buffer nil)
+                    (when opencode-sse-profile-enabled
+                      (opencode-sse--write-state connection :skip-event-type event-type)
+                      (opencode-sse--write-state connection :skip-bytes
+                                                  (string-bytes chunk))))
+                ;; Has a handler, unknown type, or not a data line --
+                ;; accumulate normally.
+                (opencode-sse--write-state connection :buffer (list chunk))
+                (when (and opencode-sse-profile-enabled event-type)
+                  (opencode-sse--write-state connection :in-flight-event event-type)
+                  (opencode-sse--write-state connection :in-flight-bytes
+                                              (string-bytes chunk)))))))
       ;; Newline found -- join all accumulated fragments with this
       ;; chunk, split into lines, and process the complete ones.
+      ;; Fragments are in reverse order, so reverse before joining.
       (let* ((parts (opencode-sse--read-state connection :buffer))
              (full (if parts
-                       (apply #'concat (nconc parts (list chunk)))
+                       (apply #'concat (nreverse (cons chunk parts)))
                      chunk))
              (lines (split-string full "\n"))
              (incomplete (car (last lines)))
