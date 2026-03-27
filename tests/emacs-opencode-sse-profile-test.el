@@ -110,19 +110,18 @@
   "Chunk stats are accumulated correctly."
   (let ((opencode-sse-profile--chunk-stats
          (list :count 0 :total-ms 0.0 :max-ms 0.0
-               :bytes-total 0 :skip-chunks 0))
+               :bytes-total 0))
         (opencode-sse-profile--last-chunk-time nil)
         (opencode-sse-profile--inter-chunk-max-ms 0.0)
         (opencode-sse-profile--inter-chunk-total-ms 0.0)
         (opencode-sse-profile--inter-chunk-count 0)
         (opencode-sse-profile--slow-gaps nil)
         (opencode-sse-profile-slow-gap-threshold-ms 50.0))
-    (opencode-sse-profile--record-chunk 1.5 256 nil nil 0)
-    (opencode-sse-profile--record-chunk 0.5 128 t nil 0)
+    (opencode-sse-profile--record-chunk 1.5 256)
+    (opencode-sse-profile--record-chunk 0.5 128)
     (should (= (plist-get opencode-sse-profile--chunk-stats :count) 2))
     (should (= (plist-get opencode-sse-profile--chunk-stats :max-ms) 1.5))
-    (should (= (plist-get opencode-sse-profile--chunk-stats :bytes-total) 384))
-    (should (= (plist-get opencode-sse-profile--chunk-stats :skip-chunks) 1))))
+    (should (= (plist-get opencode-sse-profile--chunk-stats :bytes-total) 384))))
 
 ;;; slow gap recording
 
@@ -131,19 +130,16 @@
   (let ((opencode-sse-profile--slow-gaps nil)
         (opencode-sse-profile-slow-gap-ring-size 10)
         (opencode-sse-profile-slow-gap-threshold-ms 50.0))
-    (opencode-sse-profile--record-slow-gap 200.0 "session.diff" 50000 t)
+    (opencode-sse-profile--record-slow-gap 200.0)
     (should (= (ring-length opencode-sse-profile--slow-gaps) 1))
     (let ((record (ring-ref opencode-sse-profile--slow-gaps 0)))
-      (should (= (plist-get record :gap-ms) 200.0))
-      (should (equal (plist-get record :in-flight-event) "session.diff"))
-      (should (= (plist-get record :in-flight-bytes) 50000))
-      (should (eq (plist-get record :skipping) t)))))
+      (should (= (plist-get record :gap-ms) 200.0)))))
 
 (ert-deftest test-opencode-sse-profile/slow-gap-below-threshold ()
   "Gaps below threshold are not recorded as slow gaps."
   (let ((opencode-sse-profile--chunk-stats
          (list :count 0 :total-ms 0.0 :max-ms 0.0
-               :bytes-total 0 :skip-chunks 0))
+               :bytes-total 0))
         (opencode-sse-profile--last-chunk-time (- (float-time) 0.01))
         (opencode-sse-profile--inter-chunk-max-ms 0.0)
         (opencode-sse-profile--inter-chunk-total-ms 0.0)
@@ -152,17 +148,18 @@
         (opencode-sse-profile-slow-gap-threshold-ms 50.0)
         (opencode-sse-profile-slow-gap-ring-size 10))
     ;; 10ms gap — below 50ms threshold
-    (opencode-sse-profile--record-chunk 0.1 100 nil "test.event" 50)
+    (opencode-sse-profile--record-chunk 0.1 100)
     (should (or (null opencode-sse-profile--slow-gaps)
                 (ring-empty-p opencode-sse-profile--slow-gaps)))))
 
 (ert-deftest test-opencode-sse-profile/slow-gap-between-events ()
-  "Gaps between events record nil in-flight context."
+  "Slow gap records timestamp and gap duration."
   (let ((opencode-sse-profile--slow-gaps nil)
         (opencode-sse-profile-slow-gap-ring-size 10))
-    (opencode-sse-profile--record-slow-gap 500.0 nil 0 nil)
+    (opencode-sse-profile--record-slow-gap 500.0)
     (let ((record (ring-ref opencode-sse-profile--slow-gaps 0)))
-      (should (equal (plist-get record :in-flight-event) "(between events)")))))
+      (should (= (plist-get record :gap-ms) 500.0))
+      (should (numberp (plist-get record :timestamp))))))
 
 ;;; render time accumulation
 
@@ -191,7 +188,7 @@
         (opencode-sse-profile--aggregates (make-hash-table :test 'equal))
         (opencode-sse-profile--chunk-stats
          (list :count 5 :total-ms 10.0 :max-ms 3.0
-               :bytes-total 999 :skip-chunks 2))
+               :bytes-total 999))
         (opencode-sse-profile--last-chunk-time 12345.0)
         (opencode-sse-profile--inter-chunk-max-ms 50.0)
         (opencode-sse-profile--inter-chunk-total-ms 100.0)
@@ -201,7 +198,7 @@
         (opencode-sse-profile--current-render-ms 7.0))
     (opencode-sse-profile--record-event '(:test t))
     (opencode-sse-profile--update-aggregate "foo" :total-ms 5.0)
-    (opencode-sse-profile--record-slow-gap 200.0 "test" 100 nil)
+    (opencode-sse-profile--record-slow-gap 200.0)
     (opencode-sse-profile-reset)
     (should (null opencode-sse-profile--ring))
     (should (= (hash-table-count opencode-sse-profile--aggregates) 0))
@@ -222,7 +219,7 @@
         (opencode-sse-profile--aggregates (make-hash-table :test 'equal))
         (opencode-sse-profile--chunk-stats
          (list :count 0 :total-ms 0.0 :max-ms 0.0
-               :bytes-total 0 :skip-chunks 0))
+               :bytes-total 0))
         (opencode-sse-profile--last-chunk-time nil)
         (opencode-sse-profile--inter-chunk-max-ms 0.0)
         (opencode-sse-profile--inter-chunk-total-ms 0.0)
@@ -265,7 +262,7 @@
         (opencode-sse-profile--aggregates (make-hash-table :test 'equal))
         (opencode-sse-profile--chunk-stats
          (list :count 0 :total-ms 0.0 :max-ms 0.0
-               :bytes-total 0 :skip-chunks 0))
+               :bytes-total 0))
         (opencode-sse-profile--last-chunk-time nil)
         (opencode-sse-profile--inter-chunk-max-ms 0.0)
         (opencode-sse-profile--inter-chunk-total-ms 0.0)
@@ -299,7 +296,7 @@
         (opencode-sse-profile--aggregates (make-hash-table :test 'equal))
         (opencode-sse-profile--chunk-stats
          (list :count 0 :total-ms 0.0 :max-ms 0.0
-               :bytes-total 0 :skip-chunks 0))
+               :bytes-total 0))
         (opencode-sse-profile--last-chunk-time nil)
         (opencode-sse-profile--inter-chunk-max-ms 0.0)
         (opencode-sse-profile--inter-chunk-total-ms 0.0)
@@ -331,7 +328,7 @@
         (opencode-sse-profile--aggregates (make-hash-table :test 'equal))
         (opencode-sse-profile--chunk-stats
          (list :count 0 :total-ms 0.0 :max-ms 0.0
-               :bytes-total 0 :skip-chunks 0))
+               :bytes-total 0))
         (opencode-sse-profile--last-chunk-time nil)
         (opencode-sse-profile--inter-chunk-max-ms 0.0)
         (opencode-sse-profile--inter-chunk-total-ms 0.0)

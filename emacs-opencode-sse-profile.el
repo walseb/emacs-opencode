@@ -37,7 +37,7 @@ Each value is a plist (:count :total-ms :max-ms :parse-total-ms
 
 (defvar opencode-sse-profile--chunk-stats
   (list :count 0 :total-ms 0.0 :max-ms 0.0
-        :bytes-total 0 :skip-chunks 0)
+        :bytes-total 0)
   "Aggregate stats for process-chunk calls.")
 
 (defvar opencode-sse-profile--last-chunk-time nil
@@ -54,8 +54,7 @@ Each value is a plist (:count :total-ms :max-ms :parse-total-ms
 
 (defvar opencode-sse-profile--slow-gaps nil
   "Ring buffer of slow inter-chunk gap records.
-Each record is a plist with :timestamp, :gap-ms, :in-flight-event,
-:in-flight-bytes, and :skipping.")
+Each record is a plist with :timestamp and :gap-ms.")
 
 ;;; Time helper
 
@@ -86,18 +85,12 @@ Each record is a plist with :timestamp, :gap-ms, :in-flight-event,
     (setq opencode-sse-profile--slow-gaps
           (make-ring opencode-sse-profile-slow-gap-ring-size))))
 
-(defun opencode-sse-profile--record-slow-gap (gap-ms in-flight-event
-                                                      in-flight-bytes skipping)
-  "Record a slow gap of GAP-MS with IN-FLIGHT-EVENT context.
-IN-FLIGHT-BYTES is bytes received for the current event so far.
-SKIPPING indicates whether the event is being skipped."
+(defun opencode-sse-profile--record-slow-gap (gap-ms)
+  "Record a slow inter-chunk gap of GAP-MS milliseconds."
   (opencode-sse-profile--ensure-slow-gaps-ring)
   (ring-insert opencode-sse-profile--slow-gaps
                (list :timestamp (opencode-sse-profile--now)
-                     :gap-ms gap-ms
-                     :in-flight-event (or in-flight-event "(between events)")
-                     :in-flight-bytes (or in-flight-bytes 0)
-                     :skipping skipping)))
+                     :gap-ms gap-ms)))
 
 ;;; Aggregate helpers
 
@@ -150,12 +143,8 @@ PROPS is a plist of (:total-ms :parse-ms :dispatch-ms :render-ms :bytes)."
 
 ;;; Chunk-level profiling
 
-(defun opencode-sse-profile--record-chunk (elapsed-ms bytes skipping
-                                                     in-flight-event
-                                                     in-flight-bytes)
-  "Record a chunk processing with ELAPSED-MS, BYTES, and SKIPPING flag.
-IN-FLIGHT-EVENT is the event type currently being assembled (or nil).
-IN-FLIGHT-BYTES is the bytes received for that event so far."
+(defun opencode-sse-profile--record-chunk (elapsed-ms bytes)
+  "Record a chunk processing with ELAPSED-MS and BYTES."
   (let ((now (opencode-sse-profile--now)))
     ;; Inter-chunk gap
     (when opencode-sse-profile--last-chunk-time
@@ -166,10 +155,8 @@ IN-FLIGHT-BYTES is the bytes received for that event so far."
               (max opencode-sse-profile--inter-chunk-max-ms gap-ms))
         (setq opencode-sse-profile--inter-chunk-count
               (1+ opencode-sse-profile--inter-chunk-count))
-        ;; Record slow gaps with context
         (when (>= gap-ms opencode-sse-profile-slow-gap-threshold-ms)
-          (opencode-sse-profile--record-slow-gap
-           gap-ms in-flight-event in-flight-bytes skipping))))
+          (opencode-sse-profile--record-slow-gap gap-ms))))
     (setq opencode-sse-profile--last-chunk-time now)
     ;; Chunk stats
     (plist-put opencode-sse-profile--chunk-stats :count
@@ -179,10 +166,7 @@ IN-FLIGHT-BYTES is the bytes received for that event so far."
     (plist-put opencode-sse-profile--chunk-stats :max-ms
                (max (plist-get opencode-sse-profile--chunk-stats :max-ms) elapsed-ms))
     (plist-put opencode-sse-profile--chunk-stats :bytes-total
-               (+ (plist-get opencode-sse-profile--chunk-stats :bytes-total) bytes))
-    (when skipping
-      (plist-put opencode-sse-profile--chunk-stats :skip-chunks
-                 (1+ (plist-get opencode-sse-profile--chunk-stats :skip-chunks))))))
+               (+ (plist-get opencode-sse-profile--chunk-stats :bytes-total) bytes))))
 
 ;;; Handler-level render timing (set by session render instrumentation)
 
@@ -229,7 +213,7 @@ Set by instrumented render functions, consumed by finalize-event.")
   (clrhash opencode-sse-profile--aggregates)
   (setq opencode-sse-profile--chunk-stats
         (list :count 0 :total-ms 0.0 :max-ms 0.0
-              :bytes-total 0 :skip-chunks 0))
+              :bytes-total 0))
   (setq opencode-sse-profile--last-chunk-time nil)
   (setq opencode-sse-profile--inter-chunk-max-ms 0.0)
   (setq opencode-sse-profile--inter-chunk-total-ms 0.0)
@@ -278,8 +262,7 @@ Set by instrumented render functions, consumed by finalize-event.")
                (count (plist-get stats :count))
                (total (plist-get stats :total-ms))
                (max-ms (plist-get stats :max-ms))
-               (bytes (plist-get stats :bytes-total))
-               (skip-chunks (plist-get stats :skip-chunks)))
+               (bytes (plist-get stats :bytes-total)))
           (insert "── Chunk Processing ──────────────────────\n")
           (insert (format "  Chunks processed:  %d\n" count))
           (insert (format "  Total time:        %s\n"
@@ -289,9 +272,8 @@ Set by instrumented render functions, consumed by finalize-event.")
                            (opencode-sse-profile--safe-div total count))))
           (insert (format "  Max chunk time:    %s\n"
                           (opencode-sse-profile--format-ms max-ms)))
-          (insert (format "  Total bytes:       %s\n"
-                          (opencode-sse-profile--format-bytes bytes)))
-          (insert (format "  Skip-path chunks:  %d\n\n" skip-chunks)))
+          (insert (format "  Total bytes:       %s\n\n"
+                          (opencode-sse-profile--format-bytes bytes))))
 
         ;; Inter-chunk gaps
         (let ((count opencode-sse-profile--inter-chunk-count)
@@ -317,14 +299,10 @@ Set by instrumented render functions, consumed by finalize-event.")
                  (show (min len 30)))
             (insert (format "  %d slow gaps recorded (showing %d largest)\n\n"
                             len show))
-            (insert (format "  %-12s %10s  %-28s %12s %s\n"
-                            "Time" "Gap" "In-flight event"
-                            "Bytes so far" ""))
-            (insert (format "  %-12s %10s  %-28s %12s\n"
+            (insert (format "  %-12s %10s\n" "Time" "Gap"))
+            (insert (format "  %-12s %10s\n"
                             (make-string 12 ?─)
-                            (make-string 10 ?─)
-                            (make-string 28 ?─)
-                            (make-string 12 ?─)))
+                            (make-string 10 ?─)))
             ;; Collect all entries and sort by gap size descending
             (let ((entries nil))
               (dotimes (i len)
@@ -338,18 +316,10 @@ Set by instrumented render functions, consumed by finalize-event.")
                        do
                        (let* ((ts (plist-get record :timestamp))
                               (time-str (format-time-string "%H:%M:%S" ts))
-                              (gap-ms (plist-get record :gap-ms))
-                              (event (plist-get record :in-flight-event))
-                              (bytes (plist-get record :in-flight-bytes))
-                              (skipping (plist-get record :skipping))
-                              (label (if skipping
-                                         (concat event " [SKIP]")
-                                       event)))
-                         (insert (format "  %-12s %10s  %-28s %12s\n"
+                              (gap-ms (plist-get record :gap-ms)))
+                         (insert (format "  %-12s %10s\n"
                                          time-str
-                                         (opencode-sse-profile--format-ms gap-ms)
-                                         label
-                                         (opencode-sse-profile--format-bytes bytes))))))
+                                         (opencode-sse-profile--format-ms gap-ms))))))
             (insert "\n")))
 
         ;; Per-event-type table

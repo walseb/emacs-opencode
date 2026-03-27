@@ -24,6 +24,17 @@
   "Return nil for empty input."
   (should (null (opencode-sse--extract-event-type ""))))
 
+;;; strip-data-prefix
+
+(ert-deftest test-opencode-sse/strip-data-prefix ()
+  "Strip \"data: \" prefix from a string."
+  (should (equal (opencode-sse--strip-data-prefix
+                  "data: {\"type\":\"foo\"}")
+                 "{\"type\":\"foo\"}"))
+  ;; No prefix — return unchanged.
+  (should (equal (opencode-sse--strip-data-prefix "{\"type\":\"foo\"}")
+                 "{\"type\":\"foo\"}")))
+
 ;;; build-url
 
 (ert-deftest test-opencode-sse/build-url ()
@@ -71,50 +82,49 @@
   "Read and write SSE parse state."
   (let ((conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (should (null (opencode-sse--read-state conn :buffer)))
-    (opencode-sse--write-state conn :buffer '("partial"))
-    (should (equal (opencode-sse--read-state conn :buffer) '("partial")))))
-
-(ert-deftest test-opencode-sse/append-data ()
-  "Append data lines stored as a reverse list."
-  (let ((conn (opencode-connection-create)))
-    (opencode-sse--initialize-state conn)
-    (opencode-sse--append-data conn "line1")
-    (should (equal (opencode-sse--read-state conn :data) '("line1")))
-    (opencode-sse--append-data conn "line2")
-    (should (equal (opencode-sse--read-state conn :data) '("line2" "line1")))
-    ;; join-data returns them in original order
-    (should (equal (opencode-sse--join-data conn) "line1\nline2"))))
+    (should (null (opencode-sse--read-state conn :fragments)))
+    (opencode-sse--write-state conn :fragments '("partial"))
+    (should (equal (opencode-sse--read-state conn :fragments) '("partial")))))
 
 (ert-deftest test-opencode-sse/clear-event ()
-  "Clear event resets data and skipping."
+  "Clear event resets fragments and trailing-nl."
   (let ((conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse--write-state conn :data "some data")
-    (opencode-sse--write-state conn :skipping t)
+    (opencode-sse--write-state conn :fragments '("some data"))
+    (opencode-sse--write-state conn :trailing-nl t)
     (opencode-sse--clear-event conn)
-    (should (null (opencode-sse--read-state conn :data)))
-    (should (null (opencode-sse--read-state conn :skipping)))))
+    (should (null (opencode-sse--read-state conn :fragments)))
+    (should (null (opencode-sse--read-state conn :trailing-nl)))))
 
-;;; process-line and process-chunk
+;;; find-boundary
 
-(ert-deftest test-opencode-sse/process-line-comment ()
-  "Comment lines (starting with ':') are ignored."
+(ert-deftest test-opencode-sse/find-boundary-within-chunk ()
+  "Find boundary within a single chunk."
   (let ((conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse--process-line conn ":keep-alive")
-    (should (null (opencode-sse--read-state conn :data)))))
+    ;; Returns (PRE-END . REST-START) cons.
+    (should (equal (opencode-sse--find-boundary conn "data: {}\n\n") '(8 . 10)))
+    (should (null (opencode-sse--find-boundary conn "data: {}\n")))))
 
-(ert-deftest test-opencode-sse/process-line-data-accumulates ()
-  "Data lines accumulate in state as a list."
-  (let ((conn (opencode-connection-create))
-        (opencode-sse--handlers nil))
+(ert-deftest test-opencode-sse/find-boundary-split-across-chunks ()
+  "Detect boundary split across two chunks via trailing-nl flag."
+  (let ((conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    ;; Register a handler so data is not skipped
-    (opencode-sse-register-handler "test.event" (lambda (_e _d)))
-    (opencode-sse--process-line conn "data: {\"type\":\"test.event\",\"a\":1}")
-    (should (equal (opencode-sse--read-state conn :data)
-                   '("{\"type\":\"test.event\",\"a\":1}")))))
+    ;; Previous chunk ended with \n.
+    (opencode-sse--write-state conn :trailing-nl t)
+    ;; This chunk starts with \n — split boundary: (0 . 1).
+    (should (equal (opencode-sse--find-boundary conn "\nrest") '(0 . 1)))
+    ;; No trailing-nl — no boundary even though chunk starts with \n.
+    (opencode-sse--write-state conn :trailing-nl nil)
+    (should (null (opencode-sse--find-boundary conn "\nrest")))))
+
+(ert-deftest test-opencode-sse/find-boundary-empty-chunk ()
+  "Empty chunk returns nil."
+  (let ((conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (should (null (opencode-sse--find-boundary conn "")))))
+
+;;; process-chunk — complete events
 
 (ert-deftest test-opencode-sse/process-chunk-complete-event ()
   "A complete SSE event dispatches to the handler."
@@ -148,43 +158,79 @@
     (should dispatched)
     (should (equal (alist-get 'x dispatched) 1))))
 
-(ert-deftest test-opencode-sse/process-chunk-skips-unhandled-events ()
-  "Events without registered handlers are skipped efficiently."
+(ert-deftest test-opencode-sse/process-chunk-boundary-split-across-chunks ()
+  "Event boundary \\n\\n split across two chunks is detected."
   (let ((opencode-sse--handlers nil)
         (dispatched nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler
+     "split.test"
+     (lambda (_event data)
+       (setq dispatched data)))
+    ;; First chunk: data line ending with \n (first \n of boundary).
+    (opencode-sse--process-chunk
+     conn "data: {\"type\":\"split.test\",\"ok\":true}\n")
+    (should (null dispatched))
+    ;; Second chunk starts with \n (second \n of boundary).
+    (opencode-sse--process-chunk conn "\n")
+    (should dispatched)
+    (should (equal (alist-get 'ok dispatched) t))))
+
+(ert-deftest test-opencode-sse/process-chunk-two-events-one-chunk ()
+  "Two complete events in a single chunk both dispatch."
+  (let ((opencode-sse--handlers nil)
+        (results nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler
+     "ev.one"
+     (lambda (_event data) (push (cons 'one data) results)))
+    (opencode-sse-register-handler
+     "ev.two"
+     (lambda (_event data) (push (cons 'two data) results)))
+    (opencode-sse--process-chunk
+     conn
+     (concat "data: {\"type\":\"ev.one\",\"n\":1}\n\n"
+             "data: {\"type\":\"ev.two\",\"n\":2}\n\n"))
+    (should (= (length results) 2))
+    ;; Results are pushed, so newest first.
+    (should (equal (alist-get 'n (cdr (nth 0 results))) 2))
+    (should (equal (alist-get 'n (cdr (nth 1 results))) 1))))
+
+;;; process-chunk — unhandled events
+
+(ert-deftest test-opencode-sse/unhandled-event-not-dispatched ()
+  "Events without registered handlers are not dispatched."
+  (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
     ;; No handler registered for "unknown.event"
     (opencode-sse--process-chunk
      conn
      "data: {\"type\":\"unknown.event\",\"data\":\"large payload\"}\n\n")
-    ;; State should be clean after the event
-    (should (null (opencode-sse--read-state conn :data)))
-    (should (null (opencode-sse--read-state conn :skipping)))))
+    ;; State should be clean after the event.
+    (should (null (opencode-sse--read-state conn :fragments)))))
 
-(ert-deftest test-opencode-sse/skip-fast-path-discards-subsequent-chunks ()
-  "Subsequent chunks of a skipped event are discarded without splitting."
+(ert-deftest test-opencode-sse/unhandled-event-multi-chunk ()
+  "An unhandled event split across chunks accumulates and is discarded."
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    ;; First chunk: triggers skip on an unhandled event type.
-    ;; No terminating \n\n -- the event continues.
+    ;; No handler registered for "session.diff".
     (opencode-sse--process-chunk
-     conn
-     "data: {\"type\":\"session.diff\",\"patch\":[{\"op\":\"replace\"\n")
-    (should (opencode-sse--read-state conn :skipping))
-    ;; :buffer is ("\n") (seeded so the fast path can detect a boundary
-    ;; that starts at the beginning of the very next chunk).
-    (should (equal (opencode-sse--read-state conn :buffer) '("\n")))
-    ;; Subsequent chunks are discarded entirely by the fast path.
+     conn "data: {\"type\":\"session.diff\",\"patch\":[{\"op\":\"replace\"")
+    ;; Fragments accumulate (no skip mode to discard them).
+    (should (opencode-sse--read-state conn :fragments))
+    ;; More chunks.
     (opencode-sse--process-chunk conn ",\"path\":\"/files\",\"value\":\"")
-    (should (opencode-sse--read-state conn :skipping))
-    (should (null (opencode-sse--read-state conn :data)))
-    (opencode-sse--process-chunk conn "...more huge diff data...")
-    (should (opencode-sse--read-state conn :skipping))))
+    (opencode-sse--process-chunk conn "...more data...")
+    ;; Boundary ends it — fragments cleared, no dispatch.
+    (opencode-sse--process-chunk conn "\"}\n\n")
+    (should (null (opencode-sse--read-state conn :fragments)))))
 
-(ert-deftest test-opencode-sse/skip-fast-path-resumes-on-boundary ()
-  "Fast path detects event boundary and processes the next event."
+(ert-deftest test-opencode-sse/unhandled-event-then-handled ()
+  "After an unhandled event, subsequent handled events dispatch correctly."
   (let ((opencode-sse--handlers nil)
         (dispatched nil)
         (conn (opencode-connection-create)))
@@ -193,84 +239,69 @@
      "message.created"
      (lambda (_event data)
        (setq dispatched data)))
-    ;; First chunk: triggers skip.
+    ;; Unhandled event with split boundary.
     (opencode-sse--process-chunk
-     conn
-     "data: {\"type\":\"session.diff\",\"big\":true}\n")
-    (should (opencode-sse--read-state conn :skipping))
-    ;; Second chunk: contains the boundary (\n\n) ending the skipped
-    ;; event, followed by the start of a handled event.
+     conn "data: {\"type\":\"session.diff\",\"big\":true}\n")
+    ;; Boundary for unhandled event + start of handled event.
     (opencode-sse--process-chunk
-     conn
-     "\ndata: {\"type\":\"message.created\",\"id\":7}\n\n")
-    (should-not (opencode-sse--read-state conn :skipping))
+     conn "\ndata: {\"type\":\"message.created\",\"id\":7}\n\n")
     (should dispatched)
     (should (equal (alist-get 'id dispatched) 7))))
 
-(ert-deftest test-opencode-sse/skip-fast-path-boundary-only-chunk ()
-  "A chunk containing just the event boundary correctly ends skip."
+(ert-deftest test-opencode-sse/unhandled-event-large-payload ()
+  "A large unhandled event with many chunks is discarded at finalization."
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    ;; Enter skip mode.
-    (opencode-sse--process-chunk
-     conn
-     "data: {\"type\":\"session.diff\",\"x\":1}\n")
-    (should (opencode-sse--read-state conn :skipping))
-    ;; Chunk with just the boundary.
-    (opencode-sse--process-chunk conn "\n")
-    ;; Skip should be cleared.
-    (should-not (opencode-sse--read-state conn :skipping))
-    (should (null (opencode-sse--read-state conn :data)))))
+    ;; Simulate many chunks for an unhandled event.
+    (opencode-sse--process-chunk conn "data: {\"type\":\"session.diff\",\"data\":\"")
+    (dotimes (_ 100)
+      (opencode-sse--process-chunk conn (make-string 1024 ?x)))
+    ;; Boundary ends it.
+    (opencode-sse--process-chunk conn "\"}\n\n")
+    ;; State is clean.
+    (should (null (opencode-sse--read-state conn :fragments)))))
 
-(ert-deftest test-opencode-sse/process-chunk-strips-cr ()
-  "Carriage returns in SSE lines are stripped."
+(ert-deftest test-opencode-sse/multiple-events-after-unhandled ()
+  "After an unhandled event, multiple subsequent events dispatch correctly."
   (let ((opencode-sse--handlers nil)
-        (dispatched nil)
+        (results nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
-     "cr.test"
-     (lambda (_event data)
-       (setq dispatched data)))
+     "good.event"
+     (lambda (_event data) (push data results)))
+    ;; Unhandled event, then two handled events in one chunk.
     (opencode-sse--process-chunk
      conn
-     "data: {\"type\":\"cr.test\",\"ok\":true}\r\n\r\n")
-    (should dispatched)))
+     (concat "data: {\"type\":\"skip.me\"}\n\n"
+             "data: {\"type\":\"good.event\",\"n\":1}\n\n"
+             "data: {\"type\":\"good.event\",\"n\":2}\n\n"))
+    (should (= (length results) 2))
+    (should (equal (alist-get 'n (nth 0 results)) 2))
+    (should (equal (alist-get 'n (nth 1 results)) 1))))
 
-(ert-deftest test-opencode-sse/process-line-strips-leading-space ()
-  "Per SSE spec, strip at most one leading space from data value."
-  (let ((conn (opencode-connection-create))
-        (opencode-sse--handlers nil))
-    (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler "sp.test" (lambda (_e _d)))
-    (opencode-sse--process-line conn "data:  {\"type\":\"sp.test\"}")
-    ;; One leading space stripped, one remains; stored as list
-    (should (equal (opencode-sse--read-state conn :data)
-                   '(" {\"type\":\"sp.test\"}")))))
-
-;;; chunk-list accumulation (large payload performance)
+;;; process-chunk — fragment accumulation
 
 (ert-deftest test-opencode-sse/chunk-accumulation-no-newline ()
-  "Chunks without newlines accumulate as a reversed list."
+  "Chunks without newlines accumulate as a reversed fragment list."
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    ;; Register a handler so the first chunk isn't skipped by early detection.
     (opencode-sse-register-handler "msg.updated" (lambda (_e _d)))
-    ;; Simulate a large data line arriving in multiple chunks with no newlines.
+    ;; Simulate a large data line arriving in multiple chunks.
     (opencode-sse--process-chunk conn "data: {\"type\":\"msg")
-    (should (equal (opencode-sse--read-state conn :buffer)
+    (should (equal (opencode-sse--read-state conn :fragments)
                    '("data: {\"type\":\"msg")))
     (opencode-sse--process-chunk conn ".updated\",\"big\":\"")
-    (should (equal (opencode-sse--read-state conn :buffer)
+    (should (equal (opencode-sse--read-state conn :fragments)
                    '(".updated\",\"big\":\"" "data: {\"type\":\"msg")))
     (opencode-sse--process-chunk conn "payload\"}")
-    (should (equal (opencode-sse--read-state conn :buffer)
+    (should (equal (opencode-sse--read-state conn :fragments)
                    '("payload\"}" ".updated\",\"big\":\"" "data: {\"type\":\"msg")))))
 
-(ert-deftest test-opencode-sse/chunk-accumulation-then-newline ()
-  "Accumulated chunks are joined and processed when a newline arrives."
+(ert-deftest test-opencode-sse/chunk-accumulation-then-boundary ()
+  "Accumulated chunks are joined and dispatched when boundary arrives."
   (let ((opencode-sse--handlers nil)
         (dispatched nil)
         (conn (opencode-connection-create)))
@@ -283,7 +314,7 @@
     (opencode-sse--process-chunk conn ".updated\",\"x\":")
     (opencode-sse--process-chunk conn "99}")
     (should (null dispatched))
-    ;; Newline + blank line to finalize the event.
+    ;; Boundary to finalize the event.
     (opencode-sse--process-chunk conn "\n\n")
     (should dispatched)
     (should (equal (alist-get 'x dispatched) 99))))
@@ -297,7 +328,6 @@
     (opencode-sse-register-handler
      "big.event"
      (lambda (_event data) (setq dispatched data)))
-    ;; Simulate 100 small chunks building up a data line.
     (opencode-sse--process-chunk conn "data: {\"type\":\"big.event\",\"v\":\"")
     (dotimes (_ 100)
       (opencode-sse--process-chunk conn "x"))
@@ -305,156 +335,61 @@
     (should dispatched)
     (should (= (length (alist-get 'v dispatched)) 100))))
 
-(ert-deftest test-opencode-sse/chunk-newline-mid-chunk ()
-  "A chunk containing a newline in the middle correctly splits."
-  (let ((opencode-sse--handlers nil)
-        (conn (opencode-connection-create)))
-    (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler "mid.test" (lambda (_e _d)))
-    ;; First chunk has no newline.
-    (opencode-sse--process-chunk conn "data: {\"type\":\"mid.t")
-    (should (equal (opencode-sse--read-state conn :buffer)
-                   '("data: {\"type\":\"mid.t")))
-    ;; Second chunk completes the line and starts accumulating.
-    ;; The newline-found path reverses accumulated fragments before
-    ;; joining, so the result is correct regardless of storage order.
-    (opencode-sse--process-chunk conn "est\",\"a\":1}\ndata: more")
-    ;; The complete data line should be in :data, and "data: more"
-    ;; should be the new incomplete buffer fragment.
-    (should (equal (opencode-sse--read-state conn :data)
-                   '("{\"type\":\"mid.test\",\"a\":1}")))
-    (should (equal (opencode-sse--read-state conn :buffer)
-                   '("data: more")))))
-
-(ert-deftest test-opencode-sse/skip-no-newline-early-detection ()
-  "An unhandled event arriving without newlines is skipped immediately."
-  (let ((opencode-sse--handlers nil)
-        (conn (opencode-connection-create)))
-    (opencode-sse--initialize-state conn)
-    ;; No handler registered for "session.diff".
-    ;; First chunk has no newline -- early detection should trigger.
-    (opencode-sse--process-chunk conn "data: {\"type\":\"session.diff\",\"big\":\"payl")
-    (should (opencode-sse--read-state conn :skipping))
-    ;; Buffer should NOT accumulate fragments.
-    (should (null (opencode-sse--read-state conn :buffer)))
-    ;; Subsequent chunks are discarded by the skip fast path.
-    (opencode-sse--process-chunk conn "oad data that keeps going and going")
-    (should (opencode-sse--read-state conn :skipping))
-    (should (null (opencode-sse--read-state conn :data)))
-    ;; Event boundary ends the skip.
-    (opencode-sse--process-chunk conn "\n\n")
-    (should-not (opencode-sse--read-state conn :skipping))))
-
-(ert-deftest test-opencode-sse/skip-no-newline-handled-event-accumulates ()
-  "A handled event arriving without newlines accumulates normally."
+(ert-deftest test-opencode-sse/chunk-boundary-in-middle-of-chunk ()
+  "A chunk containing the boundary in the middle correctly splits."
   (let ((opencode-sse--handlers nil)
         (dispatched nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
-     "msg.updated"
+     "mid.test"
      (lambda (_event data) (setq dispatched data)))
-    ;; First chunk has no newline but event has a handler.
-    (opencode-sse--process-chunk conn "data: {\"type\":\"msg.updated\",\"x\":")
-    (should-not (opencode-sse--read-state conn :skipping))
-    ;; Fragments should be accumulating.
-    (should (opencode-sse--read-state conn :buffer))
-    ;; More data without newline.
-    (opencode-sse--process-chunk conn "42}")
-    ;; Finalize with newline.
-    (opencode-sse--process-chunk conn "\n\n")
+    ;; First chunk has no newline.
+    (opencode-sse--process-chunk conn "data: {\"type\":\"mid.t")
+    (should (equal (opencode-sse--read-state conn :fragments)
+                   '("data: {\"type\":\"mid.t")))
+    ;; Second chunk contains boundary mid-chunk, plus start of next data.
+    (opencode-sse--process-chunk conn "est\",\"a\":1}\n\ndata: {\"type\":\"mid.t")
+    ;; The first event should have dispatched.
     (should dispatched)
-    (should (= (alist-get 'x dispatched) 42))))
+    (should (equal (alist-get 'a dispatched) 1))
+    ;; The remainder after the boundary should start accumulating.
+    (should (equal (opencode-sse--read-state conn :fragments)
+                   '("data: {\"type\":\"mid.t")))))
 
-(ert-deftest test-opencode-sse/skip-no-newline-large-payload ()
-  "A large unhandled event with many no-newline chunks is fully skipped."
-  (let ((opencode-sse--handlers nil)
-        (conn (opencode-connection-create)))
-    (opencode-sse--initialize-state conn)
-    ;; First chunk triggers early skip.
-    (opencode-sse--process-chunk conn "data: {\"type\":\"session.diff\",\"data\":\"")
-    (should (opencode-sse--read-state conn :skipping))
-    ;; Simulate many chunks (like the 15MB scenario).
-    (dotimes (_ 100)
-      (opencode-sse--process-chunk conn (make-string 1024 ?x)))
-    ;; Still skipping, no data accumulated.
-    (should (opencode-sse--read-state conn :skipping))
-    (should (null (opencode-sse--read-state conn :data)))
-    ;; Boundary ends it.
-    (opencode-sse--process-chunk conn "\"}\n\n")
-    (should-not (opencode-sse--read-state conn :skipping))))
-
-(ert-deftest test-opencode-sse/chunk-buffer-empty-after-complete-line ()
-  "Buffer is nil when a chunk ends exactly at a newline boundary."
+(ert-deftest test-opencode-sse/chunk-boundary-exactly-at-end ()
+  "State is clean when a chunk ends exactly at the boundary."
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler "exact.test" (lambda (_e _d)))
-    ;; Chunk ends exactly with \n -- no trailing fragment.
-    (opencode-sse--process-chunk conn "data: {\"type\":\"exact.test\"}\n")
-    (should (null (opencode-sse--read-state conn :buffer)))
-    (should (equal (opencode-sse--read-state conn :data)
-                   '("{\"type\":\"exact.test\"}")))))
+    (opencode-sse--process-chunk conn "data: {\"type\":\"exact.test\"}\n\n")
+    (should (null (opencode-sse--read-state conn :fragments)))
+    (should (null (opencode-sse--read-state conn :trailing-nl)))))
 
-(ert-deftest test-opencode-sse/join-buffer-helper ()
-  "The join-buffer helper produces the correct concatenation."
-  (let ((conn (opencode-connection-create)))
-    (opencode-sse--initialize-state conn)
-    ;; Empty buffer.
-    (should (equal (opencode-sse--join-buffer conn) ""))
-    ;; Single fragment.
-    (opencode-sse--write-state conn :buffer '("hello"))
-    (should (equal (opencode-sse--join-buffer conn) "hello"))
-    ;; Multiple fragments -- stored in reverse order (newest first).
-    (opencode-sse--write-state conn :buffer '("baz" "bar" "foo"))
-    (should (equal (opencode-sse--join-buffer conn) "foobarbaz"))))
+;;; trailing-nl flag
 
-(ert-deftest test-opencode-sse/join-data-helper ()
-  "The join-data helper joins lines with newlines."
-  (let ((conn (opencode-connection-create)))
-    (opencode-sse--initialize-state conn)
-    ;; Empty data.
-    (should (null (opencode-sse--join-data conn)))
-    ;; Data is stored in reverse order by append-data.
-    (opencode-sse--append-data conn "line1")
-    (opencode-sse--append-data conn "line2")
-    (should (equal (opencode-sse--join-data conn) "line1\nline2"))))
-
-(ert-deftest test-opencode-sse/multi-line-data-event ()
-  "Multi-line SSE data events are joined correctly at dispatch."
+(ert-deftest test-opencode-sse/trailing-nl-flag-set-correctly ()
+  "The trailing-nl flag tracks whether the last chunk ended with newline."
   (let ((opencode-sse--handlers nil)
-        (dispatched nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler
-     "multi.line"
-     (lambda (_event data) (setq dispatched data)))
-    ;; SSE spec: multiple data: fields are joined with \n.
-    (opencode-sse--process-chunk
-     conn
-     "data: {\"type\":\"multi.line\",\ndata: \"val\":42}\n\n")
-    (should dispatched)
-    (should (equal (alist-get 'val dispatched) 42))))
+    (opencode-sse-register-handler "trail.test" (lambda (_e _d)))
+    ;; Chunk without trailing newline.
+    (opencode-sse--process-chunk conn "data: {\"type\":\"trail.test\"")
+    (should-not (opencode-sse--read-state conn :trailing-nl))
+    ;; Chunk with trailing newline but no boundary.
+    (opencode-sse--process-chunk conn ",\"x\":1}\n")
+    (should (opencode-sse--read-state conn :trailing-nl))))
 
-(ert-deftest test-opencode-sse/skip-to-normal-transition-buffer-format ()
-  "Transition from skip to normal mode produces correct buffer format."
+(ert-deftest test-opencode-sse/trailing-nl-not-false-positive ()
+  "A chunk that does not end with \\n has trailing-nl unset."
   (let ((opencode-sse--handlers nil)
-        (dispatched nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler
-     "after.skip"
-     (lambda (_event data) (setq dispatched data)))
-    ;; Enter skip mode.
-    (opencode-sse--process-chunk
-     conn "data: {\"type\":\"no.handler\"}\n")
-    (should (opencode-sse--read-state conn :skipping))
-    ;; Boundary + start of next event in one chunk.
-    (opencode-sse--process-chunk
-     conn "\ndata: {\"type\":\"after.skip\",\"ok\":true}\n\n")
-    (should-not (opencode-sse--read-state conn :skipping))
-    (should dispatched)
-    (should (equal (alist-get 'ok dispatched) t))))
+    (opencode-sse-register-handler "fp.test" (lambda (_e _d)))
+    (opencode-sse--process-chunk conn "data: {\"type\":\"fp.test\",\"x\":1}")
+    (should-not (opencode-sse--read-state conn :trailing-nl))))
 
 ;;; handler registration
 
@@ -488,6 +423,50 @@
       (opencode-sse-register-handler "dup.test" handler)
       (opencode-sse--dispatch "dup.test" nil)
       (should (= count 1)))))
+
+;;; Edge cases
+
+(ert-deftest test-opencode-sse/event-with-no-handler-not-parsed ()
+  "Events with no handler are not JSON-parsed at finalize."
+  (let ((opencode-sse--handlers nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler "other.event" (lambda (_e _d)))
+    ;; Feed an event whose type is "no.handler" — no handler registered.
+    (opencode-sse--process-chunk
+     conn
+     "data: {\"type\":\"no.handler\",\"x\":1}\n\n")
+    ;; State is clean and no error was thrown.
+    (should (null (opencode-sse--read-state conn :fragments)))))
+
+(ert-deftest test-opencode-sse/boundary-no-trailing-nl ()
+  "Boundary in chunk when prev chunk had no trailing newline."
+  (let ((opencode-sse--handlers nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler "bn.test" (lambda (_e _d)))
+    ;; Chunk does not end with \n.
+    (opencode-sse--process-chunk conn "data: {\"type\":\"bn.test\",\"x\":1}")
+    (should-not (opencode-sse--read-state conn :trailing-nl))
+    ;; Next chunk has the full boundary.
+    (opencode-sse--process-chunk conn "\n\n")
+    (should (null (opencode-sse--read-state conn :fragments)))))
+
+(ert-deftest test-opencode-sse/handled-event-multi-chunk-no-newlines ()
+  "A handled event arriving without newlines accumulates and dispatches."
+  (let ((opencode-sse--handlers nil)
+        (dispatched nil)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler
+     "msg.updated"
+     (lambda (_event data) (setq dispatched data)))
+    (opencode-sse--process-chunk conn "data: {\"type\":\"msg.updated\",\"x\":")
+    (should (opencode-sse--read-state conn :fragments))
+    (opencode-sse--process-chunk conn "42}")
+    (opencode-sse--process-chunk conn "\n\n")
+    (should dispatched)
+    (should (= (alist-get 'x dispatched) 42))))
 
 (provide 'emacs-opencode-sse-test)
 
