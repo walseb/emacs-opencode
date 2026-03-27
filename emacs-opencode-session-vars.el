@@ -44,6 +44,12 @@ Each value is a cons (PARENT-SESSION-ID . TASK-PART-ID).")
 (defvar-local opencode-session--variant nil
   "Selected model variant for the current session buffer.")
 
+(defvar-local opencode-session--expanded-collapse-syms nil
+  "Hash table of invisibility symbols the user has manually expanded.
+Keys are symbols of the form `opencode-collapse-<part-id>'.
+When a symbol is present in this table, re-renders will not
+re-collapse the corresponding block.")
+
 (defun opencode-session--buffer-for-session (session-id)
   "Return the session buffer for SESSION-ID, if any."
   (gethash session-id opencode-session--buffers))

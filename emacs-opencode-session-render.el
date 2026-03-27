@@ -68,10 +68,18 @@
     (when sym
       (if (memq sym buffer-invisibility-spec)
           (progn
+            ;; Expanding: remove from spec and remember user choice.
             (remove-from-invisibility-spec sym)
+            (unless opencode-session--expanded-collapse-syms
+              (setq-local opencode-session--expanded-collapse-syms
+                          (make-hash-table :test 'eq)))
+            (puthash sym t opencode-session--expanded-collapse-syms)
             (let ((inhibit-read-only t))
               (opencode-session--update-collapse-indicator (point) t)))
+        ;; Collapsing: add back to spec and forget user expansion.
         (add-to-invisibility-spec sym)
+        (when opencode-session--expanded-collapse-syms
+          (remhash sym opencode-session--expanded-collapse-syms))
         (let ((inhibit-read-only t))
           (opencode-session--update-collapse-indicator (point) nil))))))
 
@@ -533,18 +541,22 @@ toggle indicator."
                        (hidden (string-join (cl-subseq lines max-lines) "\n"))
                        (overflow (- total max-lines))
                        (indicator (format "▶ %d more lines" overflow)))
-                  ;; Register the symbol so the region starts collapsed
-                  (add-to-invisibility-spec sym)
-                  (setq result (concat result "\n" visible "\n"
-                                       (propertize (concat hidden "\n")
-                                                   'invisible sym)
-                                       (propertize indicator
-                                                   'opencode-part-type "tool"
-                                                   'opencode-collapse-sym sym
-                                                   'opencode-collapse-count overflow
-                                                   'opencode-collapse-indicator sym
-                                                   'keymap opencode-session--collapse-keymap
-                                                   'mouse-face 'highlight))))
+                  ;; Collapse unless the user has manually expanded this block.
+                  (let ((user-expanded
+                         (and opencode-session--expanded-collapse-syms
+                              (gethash sym opencode-session--expanded-collapse-syms))))
+                    (unless user-expanded
+                      (add-to-invisibility-spec sym))
+                    (setq result (concat result "\n" visible "\n"
+                                         (propertize (concat hidden "\n")
+                                                     'invisible sym)
+                                         (propertize (if user-expanded "▼ collapse" indicator)
+                                                     'opencode-part-type "tool"
+                                                     'opencode-collapse-sym sym
+                                                     'opencode-collapse-count overflow
+                                                     'opencode-collapse-indicator sym
+                                                      'keymap opencode-session--collapse-keymap
+                                                      'mouse-face 'highlight)))))
               (setq result (concat result "\n" output)))))
         (concat result "\n")))))
 

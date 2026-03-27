@@ -1,5 +1,6 @@
 #+TITLE: Emacs OpenCode TODO
-
+* DONE make it so toggling open a shell block output doesn't auto-close when new shell output streams in
+CLOSED: [2026-03-25 Wed]
 * TODO fix issue where you can't scroll around when a response is streaming in
 * IN PROGRESS completion-at-point in session buffer input
 - slash commands
