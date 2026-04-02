@@ -75,6 +75,22 @@
     (goto-char (point-min))
     (should (re-search-forward opencode-session--regex-block-separator nil t))))
 
+;;; table fontification
+
+(ert-deftest test-opencode-fontify/table-separator-line-p ()
+  "Detect table separator lines."
+  (should (opencode-session--table-separator-line-p "|---|---|"))
+  (should (opencode-session--table-separator-line-p "| --- | --- |"))
+  (should (opencode-session--table-separator-line-p "|:---|---:|"))
+  (should-not (opencode-session--table-separator-line-p "| a | b |"))
+  (should-not (opencode-session--table-separator-line-p "not a table")))
+
+(ert-deftest test-opencode-fontify/table-faces-exist ()
+  "Table faces are defined."
+  (should (facep 'opencode-markdown-table-delimiter-face))
+  (should (facep 'opencode-markdown-table-separator-face))
+  (should (facep 'opencode-markdown-table-header-face)))
+
 (provide 'emacs-opencode-session-fontify-test)
 
 ;;; emacs-opencode-session-fontify-test.el ends here

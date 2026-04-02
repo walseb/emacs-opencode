@@ -150,6 +150,23 @@
   "Face for markdown horizontal rules."
   :group 'emacs-opencode)
 
+;;; Table faces
+
+(defface opencode-markdown-table-delimiter-face
+  '((t :inherit shadow))
+  "Face for markdown table pipe delimiters and structural characters."
+  :group 'emacs-opencode)
+
+(defface opencode-markdown-table-separator-face
+  '((t :inherit shadow))
+  "Face for markdown table separator rows (e.g. |---|---|)."
+  :group 'emacs-opencode)
+
+(defface opencode-markdown-table-header-face
+  '((t :inherit (font-lock-constant-face bold)))
+  "Face for markdown table header cells."
+  :group 'emacs-opencode)
+
 ;;; Agent mention face
 
 (defface opencode-agent-mention-face
@@ -542,6 +559,9 @@ Sets `match-data' group 0 to the matched region."
     ;; Fenced code blocks: ```...``` (multi-line via function matcher)
     (opencode-session--fontify-code-blocks)
 
+    ;; Markdown tables: |...|...| (multi-line via function matcher)
+    (opencode-session--fontify-tables)
+
     ;; Blockquotes: > text
     (,(opencode-session--make-text-matcher "^\\(>[[:blank:]]?\\)\\(.*\\)$")
      (1 'opencode-markdown-markup-face t)
@@ -636,6 +656,109 @@ and `opencode-markdown-code-block-face' to the content between them."
                 (setq found t))
             ;; No closing fence found — unclosed code block, skip
             (goto-char (min (1+ (match-end 0)) limit))))))
+    found))
+
+;;; Table fontification
+
+(defconst opencode-session--regex-table-separator
+  "^[[:blank:]]*|\\(?:[[:blank:]]*:?-+:?[[:blank:]]*|\\)+[[:blank:]]*$"
+  "Regular expression matching a markdown table separator row.")
+
+(defconst opencode-session--regex-table-line
+  "^[[:blank:]]*|.*|[[:blank:]]*$"
+  "Regular expression matching any markdown table row.")
+
+(defun opencode-session--table-separator-line-p (line)
+  "Return non-nil if LINE is a markdown table separator row."
+  (string-match-p opencode-session--regex-table-separator line))
+
+(defun opencode-session--fontify-table-pipes (start end)
+  "Apply delimiter face to pipe characters between START and END."
+  (save-excursion
+    (goto-char start)
+    (while (search-forward "|" end t)
+      (put-text-property (1- (point)) (point)
+                         'face
+                         'opencode-markdown-table-delimiter-face))))
+
+(defun opencode-session--fontify-table-header (start end)
+  "Apply header face to cell content between pipes on line START..END."
+  (save-excursion
+    (goto-char start)
+    (when (search-forward "|" end t)
+      (while (< (point) end)
+        (let ((cell-start (point)))
+          (if (search-forward "|" end t)
+              (let ((cell-end (1- (point))))
+                (when (> cell-end cell-start)
+                  (put-text-property cell-start cell-end
+                                    'face
+                                    'opencode-markdown-table-header-face))
+                (put-text-property (1- (point)) (point)
+                                  'face
+                                  'opencode-markdown-table-delimiter-face))
+            (goto-char end)))))))
+
+(defun opencode-session--fontify-tables (limit)
+  "Font-lock matcher for markdown tables up to LIMIT.
+Applies table faces to pipe delimiters, separator rows, and header
+cells (the row immediately before a separator row)."
+  (let ((table-re opencode-session--regex-table-line)
+        found)
+    (while (and (not found)
+                (re-search-forward table-re limit t))
+      (when (opencode-session--in-text-part-p (match-beginning 0))
+        (let ((table-start (match-beginning 0)))
+          ;; Walk backward to find the first line of this table
+          (goto-char table-start)
+          (while (and (not (bobp))
+                      (zerop (forward-line -1))
+                      (looking-at table-re)
+                      (opencode-session--in-text-part-p (point)))
+            (setq table-start (point)))
+          ;; Now find the end of the table (walk forward)
+          (goto-char table-start)
+          (let ((table-end table-start)
+                (separator-line-start nil))
+            (while (and (< (point) limit)
+                        (looking-at table-re)
+                        (opencode-session--in-text-part-p (point)))
+              (let ((line-beg (line-beginning-position))
+                    (line-fin (line-end-position))
+                    (line-text (buffer-substring-no-properties
+                                (line-beginning-position)
+                                (line-end-position))))
+                (when (opencode-session--table-separator-line-p line-text)
+                  (setq separator-line-start line-beg)
+                  (put-text-property line-beg line-fin
+                                    'face
+                                    'opencode-markdown-table-separator-face))
+                (setq table-end line-fin))
+              (forward-line 1))
+            ;; Fontify pipe delimiters and header cells
+            (goto-char table-start)
+            (while (< (point) (min table-end limit))
+              (let ((line-beg (line-beginning-position))
+                    (line-fin (line-end-position))
+                    (line-text (buffer-substring-no-properties
+                                (line-beginning-position)
+                                (line-end-position))))
+                (unless (opencode-session--table-separator-line-p line-text)
+                  (let ((is-header
+                         (and separator-line-start
+                              (save-excursion
+                                (forward-line 1)
+                                (= (line-beginning-position)
+                                   separator-line-start)))))
+                    (opencode-session--fontify-table-pipes
+                     line-beg (min line-fin limit))
+                    (when is-header
+                      (opencode-session--fontify-table-header
+                       line-beg line-fin)))))
+              (forward-line 1))
+            (set-match-data (list table-start (min table-end limit)))
+            (goto-char (min (1+ table-end) limit))
+            (setq found t)))))
     found))
 
 ;;; Diff font-lock keywords

@@ -321,6 +321,97 @@
   (let ((msg (opencode-message-create :role "user")))
     (should (null (opencode-session--message-error-text msg)))))
 
+;;; table alignment
+
+(ert-deftest test-opencode-render/table-line-p ()
+  "Detect markdown table lines."
+  (should (opencode-session--table-line-p "| a | b |"))
+  (should (opencode-session--table-line-p "|a|b|"))
+  (should (opencode-session--table-line-p "  | a | b |  "))
+  (should-not (opencode-session--table-line-p "no pipes here"))
+  (should-not (opencode-session--table-line-p "| only opening"))
+  (should-not (opencode-session--table-line-p "only closing |")))
+
+(ert-deftest test-opencode-render/table-separator-p ()
+  "Detect markdown table separator rows."
+  (should (opencode-session--table-separator-p "|---|---|"))
+  (should (opencode-session--table-separator-p "| --- | --- |"))
+  (should (opencode-session--table-separator-p "|:---|---:|"))
+  (should (opencode-session--table-separator-p "| :---: | --- |"))
+  (should-not (opencode-session--table-separator-p "| a | b |"))
+  (should-not (opencode-session--table-separator-p "| --- | text |")))
+
+(ert-deftest test-opencode-render/split-table-cells ()
+  "Split a table line into trimmed cells."
+  (should (equal (opencode-session--split-table-cells "| a | b | c |")
+                 '("a" "b" "c")))
+  (should (equal (opencode-session--split-table-cells "|  foo  |bar|")
+                 '("foo" "bar")))
+  (should (equal (opencode-session--split-table-cells "| a |  |")
+                 '("a" ""))))
+
+(ert-deftest test-opencode-render/build-table-separator ()
+  "Build a separator row from column widths."
+  (should (equal (opencode-session--build-table-separator '(5 3 4))
+                 "| ----- | --- | ---- |")))
+
+(ert-deftest test-opencode-render/build-table-row ()
+  "Build a padded table row."
+  (should (equal (opencode-session--build-table-row '("a" "bb") '(5 5))
+                 "| a     | bb    |")))
+
+(ert-deftest test-opencode-render/align-simple-table ()
+  "Align a simple two-column table."
+  (let ((input "| Name | Age |\n|---|---|\n| Alice | 30 |\n| Bob | 25 |")
+        (expected "| Name  | Age |\n| ----- | --- |\n| Alice | 30  |\n| Bob   | 25  |"))
+    (should (equal (opencode-session--align-markdown-tables input)
+                   expected))))
+
+(ert-deftest test-opencode-render/align-uneven-columns ()
+  "Align a table with varying cell widths."
+  (let ((input "|x|long column value|\n|---|---|\n|ab|c|"))
+    (let ((result (opencode-session--align-markdown-tables input)))
+      ;; All rows should have aligned pipes
+      (let ((lines (split-string result "\n")))
+        ;; Each line should start and end with |
+        (dolist (line lines)
+          (should (string-prefix-p "|" (string-trim line)))
+          (should (string-suffix-p "|" (string-trim line))))))))
+
+(ert-deftest test-opencode-render/align-no-table ()
+  "Non-table text passes through unchanged."
+  (let ((input "Just some text\nwith multiple lines\nno tables here"))
+    (should (equal (opencode-session--align-markdown-tables input) input))))
+
+(ert-deftest test-opencode-render/align-table-between-text ()
+  "Table embedded in surrounding text is aligned; other text is preserved."
+  (let ((input "Before\n\n| a | bb |\n|---|---|\n| ccc | d |\n\nAfter"))
+    (let ((result (opencode-session--align-markdown-tables input)))
+      (should (string-prefix-p "Before\n\n" result))
+      (should (string-suffix-p "\n\nAfter" result))
+      ;; The table portion should be aligned
+      (let ((lines (split-string result "\n")))
+        (should (equal (nth 0 lines) "Before"))
+        (should (equal (nth 1 lines) ""))
+        ;; Table lines (indices 2-4) should be properly formatted
+        (should (string-prefix-p "| " (nth 2 lines)))
+        (should (equal (nth 5 lines) ""))
+        (should (equal (nth 6 lines) "After"))))))
+
+(ert-deftest test-opencode-render/align-empty-cells ()
+  "Table with empty cells is handled."
+  (let ((input "| a | | c |\n|---|---|---|\n| | b | |"))
+    (let ((result (opencode-session--align-markdown-tables input)))
+      ;; Should not error
+      (should (stringp result))
+      ;; Should have aligned columns
+      (let ((lines (split-string result "\n")))
+        (should (= (length lines) 3))))))
+
+(ert-deftest test-opencode-render/align-preserves-empty-text ()
+  "Empty string passes through."
+  (should (equal (opencode-session--align-markdown-tables "") "")))
+
 (provide 'emacs-opencode-session-render-test)
 
 ;;; emacs-opencode-session-render-test.el ends here

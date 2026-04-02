@@ -2,6 +2,10 @@
 * DONE make it so toggling open a shell block output doesn't auto-close when new shell output streams in
 CLOSED: [2026-03-25 Wed]
 * TODO fix issue where you can't scroll around when a response is streaming in
+* DONE Render markdown tables with aligned columns
+CLOSED: [2026-04-02 Thu]
+Rewrite table text at render time: detect consecutive `|...|` lines, measure max column widths, and pad cells.
+* TODO handle emphasis (**thing**) in font-lock
 * IN PROGRESS completion-at-point in session buffer input
 - slash commands
 - @agent
@@ -28,8 +32,6 @@ E.g. "OpenCode wants to rg foobar .*" or "OpenCode wants to foo/bar/baz.txt". Wh
   - made handler run sync by default instead of queueing via run-at-time 0
   - switched to url-retrieve request.el backend instead of curl, which seemed to speed up localhost network calls
 * TODO Add newline before "block level" message parts if they are the first part of the message and there isn't a blank line above
-* TODO Render markdown tables with aligned columns
-Rewrite table text at render time: detect consecutive `|...|` lines, measure max column widths, and pad cells.
 * DONE add tests
 CLOSED: [2026-03-04 Wed 10:01]
 * DONE Support !shell command mentions (inlines shell command output into prompt)

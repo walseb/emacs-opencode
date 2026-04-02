@@ -142,6 +142,94 @@
   (when (stringp string)
     (ansi-color-filter-apply string)))
 
+;;; Markdown table alignment
+
+(defun opencode-session--table-line-p (line)
+  "Return non-nil if LINE looks like a markdown table row."
+  (string-match-p "^[[:blank:]]*|.*|[[:blank:]]*$" line))
+
+(defun opencode-session--table-separator-p (line)
+  "Return non-nil if LINE is a markdown table separator row.
+A separator row contains only pipes, dashes, colons, and whitespace."
+  (string-match-p
+   "^[[:blank:]]*|\\(?:[[:blank:]]*:?-+:?[[:blank:]]*|\\)+[[:blank:]]*$"
+   line))
+
+(defun opencode-session--split-table-cells (line)
+  "Split a markdown table LINE into a list of trimmed cell strings.
+Leading and trailing pipes are removed."
+  (let ((trimmed (string-trim line)))
+    ;; Strip leading/trailing pipe
+    (when (string-prefix-p "|" trimmed)
+      (setq trimmed (substring trimmed 1)))
+    (when (string-suffix-p "|" trimmed)
+      (setq trimmed (substring trimmed 0 -1)))
+    (mapcar #'string-trim (split-string trimmed "|"))))
+
+(defun opencode-session--build-table-separator (widths)
+  "Build a separator row like |---|---| for column WIDTHS.
+Each width includes the padding spaces on either side of the cell
+content."
+  (concat "| "
+          (mapconcat (lambda (w) (make-string w ?-))
+                     widths " | ")
+          " |"))
+
+(defun opencode-session--build-table-row (cells widths)
+  "Build a table row from CELLS padded to WIDTHS.
+Each cell is left-aligned and padded with spaces."
+  (let ((parts nil))
+    (dotimes (i (length widths))
+      (let* ((cell (or (nth i cells) ""))
+             (w (nth i widths))
+             (padded (concat cell (make-string (max 0 (- w (length cell))) ?\s))))
+        (push padded parts)))
+    (concat "| " (mapconcat #'identity (nreverse parts) " | ") " |")))
+
+(defun opencode-session--align-markdown-tables (text)
+  "Rewrite markdown tables in TEXT so columns are evenly padded.
+Consecutive lines that look like table rows are grouped, column
+widths are measured, and each cell is padded to the column maximum.
+Non-table text passes through unchanged."
+  (let ((lines (split-string text "\n"))
+        (result nil)
+        (table-lines nil))
+    (cl-labels
+        ((flush-table ()
+           (when table-lines
+             (setq table-lines (nreverse table-lines))
+             (let* ((rows (mapcar #'opencode-session--split-table-cells
+                                  table-lines))
+                    ;; Determine the number of columns from the widest row
+                    (ncols (apply #'max (mapcar #'length rows)))
+                    ;; Compute max width per column (minimum 3 for separator
+                    ;; dashes)
+                    (widths (cl-loop for col below ncols
+                                     collect
+                                     (max 3
+                                          (cl-loop
+                                           for row in rows
+                                           for cell = (or (nth col row) "")
+                                           unless
+                                           (opencode-session--table-separator-p
+                                            (nth (cl-position row rows) table-lines))
+                                           maximize (length cell))))))
+               (dolist (line table-lines)
+                 (if (opencode-session--table-separator-p line)
+                     (push (opencode-session--build-table-separator widths)
+                           result)
+                   (let ((cells (opencode-session--split-table-cells line)))
+                     (push (opencode-session--build-table-row cells widths)
+                           result)))))
+             (setq table-lines nil))))
+      (dolist (line lines)
+        (if (opencode-session--table-line-p line)
+            (push line table-lines)
+          (flush-table)
+          (push line result)))
+      (flush-table)
+      (mapconcat #'identity (nreverse result) "\n"))))
+
 ;;; Format input parameters for generic/MCP tools
 
 (defun opencode-session--format-input-params (input)
@@ -303,7 +391,8 @@ properties and the user prefix indicator."
   (let ((part-type (opencode-message-part-type part)))
     (cond
      ((string= part-type "text")
-      (let ((text (or (opencode-message-part-text part) ""))
+      (let ((text (opencode-session--align-markdown-tables
+                   (or (opencode-message-part-text part) "")))
             (synthetic (opencode-message-part-synthetic part))
             (ignored (opencode-message-part-ignored part))
             (role (opencode-message-role message)))
