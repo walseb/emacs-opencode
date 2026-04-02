@@ -85,6 +85,14 @@
   "Face for markdown italic text."
   :group 'emacs-opencode)
 
+(defface opencode-markdown-bold-italic-face
+  `((t :inherit ,(if (and (facep 'markdown-bold-face)
+                          (facep 'markdown-italic-face))
+                     '(markdown-bold-face markdown-italic-face)
+                   'bold-italic)))
+  "Face for markdown bold-italic text."
+  :group 'emacs-opencode)
+
 (defface opencode-markdown-code-face
   `((t :inherit ,(if (facep 'markdown-inline-code-face)
                      'markdown-inline-code-face
@@ -185,8 +193,17 @@ Group 3 matches the code fragment itself, without backquotes.
 Group 4 matches the closing backquotes.
 Adapted from `markdown-regex-code'.")
 
+(defconst opencode-session--regex-bold-italic
+  "\\(?1:^\\|[^\\]\\)\\(?2:\\(?3:\\*\\*\\*\\|___\\)\\(?4:[^ \n\t\\]\\|[^ \n\t][^\n]*?[^\\ ]\\)\\(?5:\\3\\)\\)"
+  "Regular expression for matching bold-italic text.
+Group 1 matches the character before the opening delimiter.
+Group 2 matches the entire expression, including delimiters.
+Groups 3 and 5 match the opening and closing delimiters (*** or ___).
+Group 4 matches the text inside the delimiters.
+Derived from `opencode-session--regex-bold'.")
+
 (defconst opencode-session--regex-bold
-  "\\(?1:^\\|[^\\]\\)\\(?2:\\(?3:\\*\\*\\|__\\)\\(?4:[^ \n\t\\]\\|[^ \n\t]\\(?:.\\|\n[^\n]\\)*?[^\\ ]\\)\\(?5:\\3\\)\\)"
+  "\\(?1:^\\|[^\\]\\)\\(?2:\\(?3:\\*\\*\\|__\\)\\(?4:[^ \n\t\\]\\|[^ \n\t][^\n]*?[^\\ ]\\)\\(?5:\\3\\)\\)"
   "Regular expression for matching bold text.
 Group 1 matches the character before the opening delimiter.
 Group 2 matches the entire expression, including delimiters.
@@ -195,7 +212,7 @@ Group 4 matches the text inside the delimiters.
 Adapted from `markdown-regex-bold'.")
 
 (defconst opencode-session--regex-italic
-  "\\(?:^\\|[^\\]\\)\\(?1:\\(?2:[*_]\\)\\(?3:[^ \\]\\2\\|[^ ]\\(?:.\\|\n[^\n]\\)*?\\)\\(?4:\\2\\)\\)"
+  "\\(?:^\\|[^\\]\\)\\(?1:\\(?2:[*_]\\)\\(?3:[^ \\]\\2\\|[^ ][^\n]*?\\)\\(?4:\\2\\)\\)"
   "Regular expression for matching italic text.
 Group 1 matches the entire expression, including delimiters.
 Groups 2 and 4 match the opening and closing delimiters.
@@ -395,47 +412,113 @@ Adapted from `markdown-match-inline-generic'."
        (t
         (<= (match-end 0) last))))))
 
-;;; Bold matching (adapted from markdown-mode)
+;;; Bold-italic matching and fontification
 
-(defun opencode-session--match-bold (last)
-  "Match bold markup from point to LAST.
-Adapted from `markdown-match-bold'."
-  (let (done retval last-inline-code)
-    (while (not done)
-      (if (opencode-session--match-inline-generic
-           opencode-session--regex-bold last)
-          (let ((begin (match-beginning 2))
-                (end (match-end 2)))
-            (if (or
-                 ;; Not in a text part
-                 (not (opencode-session--in-text-part-p begin))
-                 ;; Inside cached inline code range
-                 (and last-inline-code
-                      (>= begin (car last-inline-code))
-                      (< begin (cdr last-inline-code)))
-                 ;; Inside inline code (search and cache)
-                 (save-match-data
-                   (when (opencode-session--inline-code-at-pos
-                          begin (cdr last-inline-code))
-                     (setq last-inline-code
-                           `(,(match-beginning 0) . ,(match-end 0)))))
-                 ;; End is inside inline code
-                 (opencode-session--inline-code-at-pos-p end)
-                 ;; Overlaps with HR face
-                 (opencode-session--range-property-any
-                  begin end 'face '(opencode-markdown-hr-face))
-                 ;; Underscore word-boundary check
-                 (not (opencode-session--gfm-markup-underscore-p begin end)))
-                (progn (goto-char (min (1+ begin) last))
-                       (unless (< (point) last)
-                         (setq done t)))
-              (set-match-data (list (match-beginning 2) (match-end 2)
-                                    (match-beginning 3) (match-end 3)
-                                    (match-beginning 4) (match-end 4)
-                                    (match-beginning 5) (match-end 5)))
-              (setq done t retval t)))
-        (setq done t)))
-    retval))
+(defun opencode-session--fontify-bold-italic (last)
+  "Font-lock matcher for bold-italic markup up to LAST.
+Matches ***text*** or ___text___, applies faces directly, and
+marks the region with an `opencode-bold-italic' text property so
+that the bold and italic matchers skip it."
+  (let (found last-inline-code)
+    (while (and (not found)
+                (opencode-session--match-inline-generic
+                 opencode-session--regex-bold-italic last))
+      (let ((begin (match-beginning 2))
+            (end (match-end 2))
+            (delim-open-start (match-beginning 3))
+            (delim-open-end (match-end 3))
+            (content-start (match-beginning 4))
+            (content-end (match-end 4))
+            (delim-close-start (match-beginning 5))
+            (delim-close-end (match-end 5)))
+        (if (or
+             ;; Not in a text part
+             (not (opencode-session--in-text-part-p begin))
+             ;; Inside cached inline code range
+             (and last-inline-code
+                  (>= begin (car last-inline-code))
+                  (< begin (cdr last-inline-code)))
+             ;; Inside inline code (search and cache)
+             (save-match-data
+               (when (opencode-session--inline-code-at-pos
+                      begin (cdr last-inline-code))
+                 (setq last-inline-code
+                       `(,(match-beginning 0) . ,(match-end 0)))))
+             ;; End is inside inline code
+             (opencode-session--inline-code-at-pos-p end)
+             ;; Overlaps with HR face
+             (opencode-session--range-property-any
+              begin end 'face '(opencode-markdown-hr-face))
+             ;; Underscore word-boundary check
+             (not (opencode-session--gfm-markup-underscore-p begin end)))
+            (goto-char (min (1+ begin) last))
+          ;; Apply faces
+          (put-text-property delim-open-start delim-open-end
+                             'face 'opencode-markdown-markup-face)
+          (put-text-property content-start content-end
+                             'face 'opencode-markdown-bold-italic-face)
+          (put-text-property delim-close-start delim-close-end
+                             'face 'opencode-markdown-markup-face)
+          ;; Mark entire region so bold/italic matchers skip it
+          (put-text-property begin end 'opencode-bold-italic t)
+          (set-match-data (list begin end))
+          (setq found t))))
+    found))
+
+;;; Bold fontification (adapted from markdown-mode)
+
+(defun opencode-session--fontify-bold (last)
+  "Font-lock matcher for bold markup up to LAST.
+Matches **text** or __text__, applies faces directly, and marks
+the region with an `opencode-bold' text property so that the
+italic matcher skips it."
+  (let (found last-inline-code)
+    (while (and (not found)
+                (opencode-session--match-inline-generic
+                 opencode-session--regex-bold last))
+      (let ((begin (match-beginning 2))
+            (end (match-end 2))
+            (delim-open-start (match-beginning 3))
+            (delim-open-end (match-end 3))
+            (content-start (match-beginning 4))
+            (content-end (match-end 4))
+            (delim-close-start (match-beginning 5))
+            (delim-close-end (match-end 5)))
+        (if (or
+             ;; Not in a text part
+             (not (opencode-session--in-text-part-p begin))
+             ;; Already matched as bold-italic
+             (get-text-property begin 'opencode-bold-italic)
+             ;; Inside cached inline code range
+             (and last-inline-code
+                  (>= begin (car last-inline-code))
+                  (< begin (cdr last-inline-code)))
+             ;; Inside inline code (search and cache)
+             (save-match-data
+               (when (opencode-session--inline-code-at-pos
+                      begin (cdr last-inline-code))
+                 (setq last-inline-code
+                       `(,(match-beginning 0) . ,(match-end 0)))))
+             ;; End is inside inline code
+             (opencode-session--inline-code-at-pos-p end)
+             ;; Overlaps with HR face
+             (opencode-session--range-property-any
+              begin end 'face '(opencode-markdown-hr-face))
+             ;; Underscore word-boundary check
+             (not (opencode-session--gfm-markup-underscore-p begin end)))
+            (goto-char (min (1+ begin) last))
+          ;; Apply faces
+          (put-text-property delim-open-start delim-open-end
+                             'face 'opencode-markdown-markup-face)
+          (put-text-property content-start content-end
+                             'face 'opencode-markdown-bold-face)
+          (put-text-property delim-close-start delim-close-end
+                             'face 'opencode-markdown-markup-face)
+          ;; Mark entire region so italic matcher skips it
+          (put-text-property begin end 'opencode-bold t)
+          (set-match-data (list begin end))
+          (setq found t))))
+    found))
 
 ;;; Italic matching (adapted from markdown-mode)
 
@@ -466,10 +549,12 @@ Adapted from `markdown-match-italic'."
                            `(,(match-beginning 0) . ,(match-end 0)))))
                  ;; End is inside inline code
                  (opencode-session--inline-code-at-pos-p (1- end))
-                 ;; Overlaps with bold or HR face
+                 ;; Already matched as bold-italic or bold
+                 (get-text-property begin 'opencode-bold-italic)
+                 (get-text-property begin 'opencode-bold)
+                 ;; Overlaps with HR face
                  (opencode-session--range-property-any
-                  begin end 'face '(opencode-markdown-bold-face
-                                    opencode-markdown-hr-face))
+                  begin end 'face '(opencode-markdown-hr-face))
                  ;; Underscore word-boundary check
                  (not (opencode-session--gfm-markup-underscore-p
                        begin close-end)))
@@ -592,16 +677,21 @@ Sets `match-data' group 0 to the matched region."
      (3 'opencode-markdown-markup-face t)
      (4 'opencode-markdown-link-url-face t))
 
-    ;; Bold: **text** or __text__
-    (opencode-session--match-bold
-     (1 'opencode-markdown-markup-face prepend)
-     (2 'opencode-markdown-bold-face append)
-     (3 'opencode-markdown-markup-face prepend))
+    ;; Bold-italic: ***text*** or ___text___ — must come before
+    ;; bold/italic so those matchers can skip already-matched regions.
+    ;; Uses a function-form keyword to mark the entire region
+    ;; (including delimiters) with a text property that bold/italic
+    ;; matchers check.
+    (opencode-session--fontify-bold-italic)
+
+    ;; Bold: **text** or __text__ — uses a function-form keyword
+    ;; to mark the region with a text property that italic skips.
+    (opencode-session--fontify-bold)
 
     ;; Italic: *text* or _text_
     (opencode-session--match-italic
      (1 'opencode-markdown-markup-face prepend)
-     (2 'opencode-markdown-italic-face append)
+     (2 'opencode-markdown-italic-face prepend)
      (3 'opencode-markdown-markup-face prepend))
 
     ;; @agent mentions: @name preceded by whitespace or start of line
@@ -619,14 +709,14 @@ lines, `opencode-markdown-language-face' to the language identifier,
 and `opencode-markdown-code-block-face' to the content between them."
   (let (found)
     (while (and (not found)
-                (re-search-forward "^\\(```\\)\\([^\n]*\\)$" limit t))
+                (re-search-forward "^[[:blank:]]*\\(```\\)\\([^\n]*\\)$" limit t))
       (when (opencode-session--in-text-part-p (match-beginning 0))
         (let ((fence-start (match-beginning 0))
               (backticks-end (match-end 1))
               (lang-start (match-beginning 2))
               (lang-end (match-end 2))
               (content-start (1+ (match-end 0))))
-          (if (re-search-forward "^\\(```\\)[[:blank:]]*$" limit t)
+          (if (re-search-forward "^[[:blank:]]*\\(```\\)[[:blank:]]*$" limit t)
               (let ((fence-end (match-end 0))
                     (content-end (match-beginning 0)))
                 ;; Opening fence backticks

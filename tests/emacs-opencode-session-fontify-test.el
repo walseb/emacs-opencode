@@ -29,6 +29,62 @@
     (should (re-search-forward opencode-session--regex-italic nil t))
     (should (equal (match-string 3) "italic"))))
 
+(ert-deftest test-opencode-fontify/regex-bold-italic-matches-triple-asterisks ()
+  "Bold-italic regex matches ***bold italic*** text."
+  (with-temp-buffer
+    (insert "hello ***bold italic*** world")
+    (goto-char (point-min))
+    (should (re-search-forward opencode-session--regex-bold-italic nil t))
+    (should (equal (match-string 4) "bold italic"))))
+
+(ert-deftest test-opencode-fontify/bold-italic-face-exists ()
+  "Bold-italic face is defined."
+  (should (facep 'opencode-markdown-bold-italic-face)))
+
+;;; Emphasis does not cross newlines
+
+(ert-deftest test-opencode-fontify/bold-does-not-cross-newlines ()
+  "Bold regex does not match across newlines."
+  (with-temp-buffer
+    (insert "hello **bold\ntext** world")
+    (goto-char (point-min))
+    (should-not (re-search-forward opencode-session--regex-bold nil t))))
+
+(ert-deftest test-opencode-fontify/italic-does-not-cross-newlines ()
+  "Italic regex does not match across newlines."
+  (with-temp-buffer
+    (insert "hello *italic\ntext* world")
+    (goto-char (point-min))
+    (should-not (re-search-forward opencode-session--regex-italic nil t))))
+
+(ert-deftest test-opencode-fontify/bold-italic-does-not-cross-newlines ()
+  "Bold-italic regex does not match across newlines."
+  (with-temp-buffer
+    (insert "hello ***bold italic\ntext*** world")
+    (goto-char (point-min))
+    (should-not (re-search-forward opencode-session--regex-bold-italic nil t))))
+
+;;; Bold followed by italic on same line
+
+(ert-deftest test-opencode-fontify/bold-then-italic-separate ()
+  "Bold and italic on the same line do not interfere with each other."
+  (with-temp-buffer
+    (insert (propertize "**bold** and *italic*"
+                        'opencode-part-type "assistant-text"))
+    ;; Run bold fontifier
+    (goto-char (point-min))
+    (opencode-session--fontify-bold (point-max))
+    ;; Check bold applied correctly
+    (should (eq (get-text-property 3 'face) 'opencode-markdown-bold-face))
+    ;; Check bold property is set on the delimiter region
+    (should (get-text-property 1 'opencode-bold))
+    ;; Run italic matcher
+    (goto-char (point-min))
+    (let ((result (opencode-session--match-italic (point-max))))
+      (should result)
+      ;; The italic match should be "italic", not "* and *"
+      (should (equal (match-string 2) "italic")))))
+
 ;;; in-part-p
 
 (ert-deftest test-opencode-fontify/in-part-p ()
