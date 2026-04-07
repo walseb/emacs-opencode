@@ -17,8 +17,7 @@ connection base URL. DATA is passed through to `request`. When JSON is
 provided, it is encoded and sent with a JSON content type. PARSER defaults to
 `json-read` when omitted. HEADERS is an alist of HTTP headers. Any remaining
 ARGS are forwarded to `request`."
-  (let* ((request-backend 'url-retrieve)
-         (base-url (opencode-connection-base-url conn))
+  (let* ((base-url (opencode-connection-base-url conn))
          (url (concat (string-remove-suffix "/" base-url) path))
          (auth (when (opencode-connection-password conn)
                  (list (or (opencode-connection-username conn) "opencode")
@@ -26,7 +25,7 @@ ARGS are forwarded to `request`."
          (payload (when json (json-encode json)))
          (merged-headers (if json
                              (append headers '(("Content-Type" . "application/json")))
-                            headers))
+                           headers))
          (timeout-value (if (plist-member args :timeout)
                             timeout
                           (or (opencode-connection-timeout conn) 10))))
