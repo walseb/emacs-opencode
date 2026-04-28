@@ -21,7 +21,9 @@
   provider-catalog
   process
   sse-process
-  sse-state)
+  sse-state
+  sse-mode
+  sse-stderr-process)
 
 
 (defcustom opencode-server-host "127.0.0.1"
