@@ -567,8 +567,8 @@ Returns the streaming process."
   (let ((backend (opencode-sse--resolve-backend)))
     (when (and (eq backend 'bridge)
                (not (file-exists-p opencode-sse--bridge-script)))
-      (message "OpenCode: bridge script not found at %s; falling back to curl"
-               opencode-sse--bridge-script)
+      (warn "OpenCode: bridge script not found at %s; falling back to curl"
+            opencode-sse--bridge-script)
       (setq backend 'curl))
     (pcase backend
       ('bridge (opencode-sse--open-bridge connection))
