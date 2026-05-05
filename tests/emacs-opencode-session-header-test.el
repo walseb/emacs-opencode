@@ -78,6 +78,92 @@
   "Waiting is busy."
   (should (opencode-session--status-busy-p "waiting")))
 
+(ert-deftest test-opencode-header/status-busy-p-struct-retry ()
+  "Retry struct is busy."
+  (should (opencode-session--status-busy-p
+           (opencode-status-create :type "retry"))))
+
+(ert-deftest test-opencode-header/status-busy-p-struct-idle ()
+  "Idle struct is not busy."
+  (should (null (opencode-session--status-busy-p
+                 (opencode-status-create :type "idle")))))
+
+(ert-deftest test-opencode-header/status-busy-p-nil ()
+  "Nil status is not busy."
+  (should (null (opencode-session--status-busy-p nil))))
+
+;;; truncate-retry-message
+
+(ert-deftest test-opencode-header/truncate-short-message ()
+  "Short messages pass through untouched."
+  (let ((opencode-session-header-retry-message-max 60))
+    (should (equal (opencode-session--truncate-retry-message "boom")
+                   "boom"))))
+
+(ert-deftest test-opencode-header/truncate-long-message ()
+  "Long messages are clipped with an ellipsis."
+  (let* ((opencode-session-header-retry-message-max 10)
+         (input (make-string 30 ?x))
+         (result (opencode-session--truncate-retry-message input)))
+    (should (equal (length result) 10))
+    (should (string-suffix-p "..." result))))
+
+(ert-deftest test-opencode-header/truncate-nil ()
+  "Nil messages stay nil."
+  (should (null (opencode-session--truncate-retry-message nil))))
+
+(ert-deftest test-opencode-header/truncate-empty ()
+  "Empty strings stay nil."
+  (should (null (opencode-session--truncate-retry-message ""))))
+
+;;; retry-countdown-suffix
+
+(ert-deftest test-opencode-header/countdown-attempt-only ()
+  "Attempt without next renders as #N."
+  (should (equal (opencode-session--retry-countdown-suffix 3 nil) "[#3]")))
+
+(ert-deftest test-opencode-header/countdown-attempt-and-next ()
+  "Attempt + future next renders countdown seconds."
+  (let* ((next (+ (* 1000.0 (float-time)) 5000))
+         (suffix (opencode-session--retry-countdown-suffix 1 next)))
+    (should (string-match-p "\\`\\[#1, in [0-9]+s\\]\\'" suffix))))
+
+(ert-deftest test-opencode-header/countdown-past-next ()
+  "Past next clamps to 0s."
+  (let* ((next (- (* 1000.0 (float-time)) 5000))
+         (suffix (opencode-session--retry-countdown-suffix 2 next)))
+    (should (string-match-p "in 0s" suffix))))
+
+(ert-deftest test-opencode-header/countdown-empty ()
+  "No attempt and no next yields nil."
+  (should (null (opencode-session--retry-countdown-suffix nil nil))))
+
+;;; header-retry-segment
+
+(ert-deftest test-opencode-header/retry-segment-not-retry ()
+  "Non-retry status produces no segment."
+  (should (null (opencode-session--header-retry-segment
+                 (opencode-status-create :type "idle"))))
+  (should (null (opencode-session--header-retry-segment
+                 (opencode-status-create :type "busy")))))
+
+(ert-deftest test-opencode-header/retry-segment-retry ()
+  "Retry status produces a fontified segment with the message."
+  (let* ((status (opencode-status-create
+                  :type "retry"
+                  :attempt 1
+                  :message "Rate Limited"))
+         (segment (opencode-session--header-retry-segment status)))
+    (should (stringp segment))
+    (should (string-match-p "Rate Limited" segment))
+    (should (eq (get-text-property 0 'face segment)
+                'opencode-session-error-face))))
+
+(ert-deftest test-opencode-header/retry-segment-no-message ()
+  "Retry status with no message and no countdown returns nil."
+  (let ((status (opencode-status-create :type "retry")))
+    (should (null (opencode-session--header-retry-segment status)))))
+
 (provide 'emacs-opencode-session-header-test)
 
 ;;; emacs-opencode-session-header-test.el ends here

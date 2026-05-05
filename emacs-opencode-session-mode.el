@@ -529,10 +529,19 @@ PREVIOUS-NAME is the previous buffer name to compare against."
   "Render the session buffer contents."
   (let ((inhibit-read-only t))
     (erase-buffer))
+  ;; The retry banner markers point into the now-erased buffer; reset
+  ;; them so the next render decides afresh whether to insert one.
+  (when (markerp opencode-session--retry-banner-start)
+    (set-marker opencode-session--retry-banner-start nil))
+  (when (markerp opencode-session--retry-banner-end)
+    (set-marker opencode-session--retry-banner-end nil))
+  (setq-local opencode-session--retry-banner-start nil)
+  (setq-local opencode-session--retry-banner-end nil)
   (opencode-session--ensure-markers)
   (opencode-session--render-header)
   (opencode-session--render-messages)
-  (opencode-session--ensure-input-region))
+  (opencode-session--ensure-input-region)
+  (opencode-session--render-retry-banner))
 
 ;;; Message state management
 
@@ -672,13 +681,16 @@ PREVIOUS-NAME is the previous buffer name to compare against."
     (opencode-session--render-header)))
 
 (defun opencode-session--update-status (session-id status)
-  "Update STATUS for SESSION-ID."
+  "Update STATUS for SESSION-ID.
+
+STATUS is an `opencode-status' struct."
   (when-let ((buffer (opencode-session--buffer-for-session session-id)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when opencode-session--session
           (setf (opencode-session-status opencode-session--session) status)
           (opencode-session--render-header)
+          (opencode-session--render-retry-banner)
           (opencode-session--maybe-start-spinner)
           (opencode-session--maybe-stop-spinner))))))
 

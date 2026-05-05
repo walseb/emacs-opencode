@@ -1,4 +1,16 @@
 #+TITLE: Emacs OpenCode TODO
+* TODO Surface =tui.toast.show= events
+The OpenCode server forwards every bus event over the SSE stream
+via =Bus.subscribeAll=, including =tui.toast.show= events used by the
+MCP auth flow and any external caller of =POST /tui/toast=.  We
+currently ignore them.  Surface in the echo area at minimum, with
+a face based on the variant (info/success/warning/error).
+
+* TODO Handle =installation.update-available= events
+The TUI prompts the user via a confirm dialog and runs an upgrade.
+At minimum we should =message= the user; eventually a customizable
+hook so users can wire it to whatever update flow they prefer.
+
 * DONE make it so toggling open a shell block output doesn't auto-close when new shell output streams in
 CLOSED: [2026-03-25 Wed]
 * TODO fix issue where you can't scroll around when a response is streaming in

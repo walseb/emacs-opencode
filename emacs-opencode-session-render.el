@@ -10,6 +10,16 @@
 (require 'emacs-opencode-session-fontify)
 (require 'emacs-opencode-sse-profile)
 
+(defvar-local opencode-session--retry-banner-start nil
+  "Marker for the start of the inline retry banner region.
+
+Nil when no banner is currently rendered.  The banner sits in the
+message log just above the input prompt area and is replaced or
+deleted on every status update.")
+
+(defvar-local opencode-session--retry-banner-end nil
+  "Marker for the end of the inline retry banner region.")
+
 (declare-function opencode--ensure-session-buffer "emacs-opencode")
 
 (defcustom opencode-session-show-reasoning nil
@@ -292,7 +302,12 @@ Only includes string, number, and boolean values."
 (declare-function opencode-session--ensure-input-prompt "emacs-opencode-session-mode")
 
 (defun opencode-session--insert-message (message text face)
-  "Insert MESSAGE with TEXT and FACE at the end of the log."
+  "Insert MESSAGE with TEXT and FACE at the end of the log.
+
+Clears the retry banner before inserting so the new message lands
+above the banner, then re-renders the banner just above the input
+prompt."
+  (opencode-session--clear-retry-banner)
   (let ((inhibit-read-only t))
     (save-excursion
       (goto-char (marker-position opencode-session--input-start-marker))
@@ -305,7 +320,103 @@ Only includes string, number, and boolean values."
         (set-marker opencode-session--input-start-marker (point))
         (set-marker opencode-session--input-marker (point))
         (opencode-session--ensure-input-prompt)
-        (opencode-session--apply-message-properties start (point) face message)))))
+        (opencode-session--apply-message-properties start (point) face message))))
+  (opencode-session--render-retry-banner))
+
+(defun opencode-session--retry-banner-text (status)
+  "Return the banner text for retry STATUS, or nil.
+
+STATUS is an `opencode-status' struct.  Returns nil when no banner
+should be displayed (status is not retry, or no message)."
+  (when (and (opencode-status-p status)
+             (string= (or (opencode-status-type status) "") "retry"))
+    (let* ((msg (opencode-status-message status))
+           (attempt (opencode-status-attempt status))
+           (next (opencode-status-next status))
+           (suffix-parts nil))
+      (when (numberp attempt)
+        (push (format "attempt #%d" attempt) suffix-parts))
+      (when (numberp next)
+        (let* ((now-ms (* 1000.0 (float-time)))
+               (remaining (max 0 (round (/ (- next now-ms) 1000.0)))))
+          (push (format "retrying in %ds" remaining) suffix-parts)))
+      (let ((suffix (when suffix-parts
+                      (format " [%s]"
+                              (string-join (nreverse suffix-parts) ", ")))))
+        (concat (or msg "retrying...")
+                (or suffix ""))))))
+
+(defun opencode-session--clear-retry-banner ()
+  "Delete the inline retry banner region, if any."
+  (when (and (markerp opencode-session--retry-banner-start)
+             (markerp opencode-session--retry-banner-end))
+    (let ((start (marker-position opencode-session--retry-banner-start))
+          (end (marker-position opencode-session--retry-banner-end))
+          (inhibit-read-only t))
+      (when (and start end (< start end))
+        (save-excursion
+          (delete-region start end))))
+    (set-marker opencode-session--retry-banner-start nil)
+    (set-marker opencode-session--retry-banner-end nil)
+    (setq-local opencode-session--retry-banner-start nil)
+    (setq-local opencode-session--retry-banner-end nil)))
+
+(defun opencode-session--render-retry-banner ()
+  "Render or remove the inline retry banner above the input prompt.
+
+Reads the current session status and either inserts the banner
+between dedicated markers (replacing any existing banner) or clears
+the region when no retry status is active.  The banner is fontified
+with `opencode-session-error-face' so it stands out as an error."
+  (when (and opencode-session--session
+             (markerp opencode-session--input-start-marker))
+    (let* ((status (opencode-session-status opencode-session--session))
+           (text (opencode-session--retry-banner-text status)))
+      (if (null text)
+          (opencode-session--clear-retry-banner)
+        (opencode-session--insert-retry-banner text)))))
+
+(defun opencode-session--insert-retry-banner (text)
+  "Insert TEXT as the inline retry banner above the input prompt.
+
+Always clears any existing banner first and re-inserts at the
+current `opencode-session--input-start-marker' position.  Pushes
+`opencode-session--input-start-marker' (and the input marker, if
+needed) past the banner and re-anchors the prompt overlay so the
+banner sits above the prompt.
+
+TEXT does not include a trailing newline; one is added so the
+banner occupies its own line."
+  (opencode-session--clear-retry-banner)
+  (let ((inhibit-read-only t)
+        (rendered (concat (propertize text
+                                      'font-lock-face 'opencode-session-error-face
+                                      'opencode-part-type "retry-banner"
+                                      'read-only t
+                                      'front-sticky t
+                                      'rear-nonsticky t)
+                          (propertize "\n\n"
+                                      'read-only t
+                                      'front-sticky t
+                                      'rear-nonsticky t))))
+    (save-excursion
+      (goto-char (marker-position opencode-session--input-start-marker))
+      (let ((insert-start (point)))
+        (insert rendered)
+        (let ((insert-end (point)))
+          (setq-local opencode-session--retry-banner-start
+                      (copy-marker insert-start))
+          (setq-local opencode-session--retry-banner-end
+                      (copy-marker insert-end))
+          ;; Push the input start marker past the banner so the input
+          ;; region remains intact and the prompt overlay anchors
+          ;; below the banner.
+          (set-marker opencode-session--input-start-marker insert-end)
+          (when (and (markerp opencode-session--input-marker)
+                     (< (marker-position opencode-session--input-marker)
+                        insert-end))
+            (set-marker opencode-session--input-marker insert-end))
+          (opencode-session--ensure-input-prompt))))))
 
 (defun opencode-session--apply-message-properties (start end _face message)
   "Apply read-only properties from START to END for MESSAGE.

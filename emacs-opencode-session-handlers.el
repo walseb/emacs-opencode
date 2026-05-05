@@ -6,6 +6,7 @@
 (require 'emacs-opencode-message)
 (require 'emacs-opencode-client)
 (require 'emacs-opencode-connection)
+(require 'emacs-opencode-session)
 (require 'emacs-opencode-sse)
 
 (declare-function opencode-session--update-session "emacs-opencode-session-mode")
@@ -37,19 +38,34 @@
         (with-current-buffer buffer
           (opencode-session--update-session info))))))
 
+(defun opencode-session--status-from-info (status-info)
+  "Build an `opencode-status' struct from STATUS-INFO alist.
+
+STATUS-INFO is the `status' field of a session.status SSE payload."
+  (let* ((type (or (alist-get 'type status-info) "idle"))
+         (attempt (alist-get 'attempt status-info))
+         (msg (alist-get 'message status-info))
+         (next (alist-get 'next status-info)))
+    (opencode-status-create
+     :type type
+     :attempt (and (numberp attempt) attempt)
+     :message (and (stringp msg) (not (string-empty-p msg)) msg)
+     :next (and (numberp next) next))))
+
 (defun opencode-session--handle-session-status (_event data)
   "Handle the session.status SSE DATA."
   (let* ((properties (alist-get 'properties data))
          (session-id (alist-get 'sessionID properties))
          (status-info (alist-get 'status properties))
-         (status (alist-get 'type status-info)))
+         (status (opencode-session--status-from-info status-info)))
     (opencode-session--update-status session-id status)))
 
 (defun opencode-session--handle-session-idle (_event data)
   "Handle the session.idle SSE DATA."
   (let* ((properties (alist-get 'properties data))
-         (session-id (alist-get 'sessionID properties)))
-    (opencode-session--update-status session-id "idle")))
+         (session-id (alist-get 'sessionID properties))
+         (status (opencode-status-create :type "idle")))
+    (opencode-session--update-status session-id status)))
 
 (defun opencode-session--session-error-text (error-info)
   "Return user-facing text extracted from session ERROR-INFO."
@@ -501,6 +517,15 @@ Returns nil when PATH is not a string."
 
 (opencode-sse-define-handler file-watcher-updated "file.watcher.updated" (_event data)
   (opencode-session--handle-file-updated _event data))
+
+;; TODO: handle additional bus events that the server publishes via
+;; `Bus.subscribeAll' on the /event SSE stream:
+;;   - `tui.toast.show'  — used by MCP auth flow and any external POST
+;;     /tui/toast caller; would be nice to surface in the echo area
+;;     with a face based on the variant (info/success/warning/error).
+;;   - `installation.update-available' — server announcing a new
+;;     opencode release; currently the TUI shows a confirm dialog and
+;;     runs the upgrade.
 
 (provide 'emacs-opencode-session-handlers)
 

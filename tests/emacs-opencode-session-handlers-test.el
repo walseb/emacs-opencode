@@ -35,6 +35,43 @@
                   '((name . "") (data . nil)))
                  "An error occurred")))
 
+;;; status-from-info
+
+(ert-deftest test-opencode-handlers/status-from-info-idle ()
+  "Build an idle status from info."
+  (let ((status (opencode-session--status-from-info '((type . "idle")))))
+    (should (opencode-status-p status))
+    (should (equal (opencode-status-type status) "idle"))
+    (should (null (opencode-status-attempt status)))
+    (should (null (opencode-status-message status)))
+    (should (null (opencode-status-next status)))))
+
+(ert-deftest test-opencode-handlers/status-from-info-retry-full ()
+  "Build a retry status with all fields populated."
+  (let ((status (opencode-session--status-from-info
+                 '((type . "retry")
+                   (attempt . 2)
+                   (message . "Provider is overloaded")
+                   (next . 1700000000000)))))
+    (should (equal (opencode-status-type status) "retry"))
+    (should (= (opencode-status-attempt status) 2))
+    (should (equal (opencode-status-message status) "Provider is overloaded"))
+    (should (= (opencode-status-next status) 1700000000000))))
+
+(ert-deftest test-opencode-handlers/status-from-info-retry-empty-message ()
+  "Empty retry message is normalized to nil."
+  (let ((status (opencode-session--status-from-info
+                 '((type . "retry")
+                   (attempt . 1)
+                   (message . "")))))
+    (should (equal (opencode-status-type status) "retry"))
+    (should (null (opencode-status-message status)))))
+
+(ert-deftest test-opencode-handlers/status-from-info-missing-type ()
+  "Missing type defaults to idle."
+  (let ((status (opencode-session--status-from-info nil)))
+    (should (equal (opencode-status-type status) "idle"))))
+
 ;;; permission helpers
 
 (ert-deftest test-opencode-handlers/permission-patterns-vector ()

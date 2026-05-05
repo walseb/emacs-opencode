@@ -318,6 +318,70 @@
     (insert "email@expl")
     (should (null (opencode-session--agent-completion-bounds)))))
 
+(ert-deftest test-opencode-session-mode/retry-banner-renders-above-prompt ()
+  "Retry banner inserts above the prompt and updates markers correctly.
+
+Regression test: previously a second render of the banner would
+collapse `opencode-session--input-start-marker' to the start of the
+banner, causing the prompt overlay to render before the banner."
+  (with-temp-buffer
+    (opencode-session-mode)
+    (setq-local opencode-session--session
+                (opencode-session-create :id "test-session"))
+    (opencode-session--ensure-markers)
+    (opencode-session--ensure-input-region)
+    ;; First render
+    (setf (opencode-session-status opencode-session--session)
+          (opencode-status-create :type "retry"
+                                  :message "first message"
+                                  :attempt 1))
+    (opencode-session--render-retry-banner)
+    (let ((banner-start-1 (marker-position opencode-session--retry-banner-start))
+          (banner-end-1 (marker-position opencode-session--retry-banner-end))
+          (input-start-1 (marker-position opencode-session--input-start-marker))
+          (overlay-start-1 (overlay-start opencode-session--input-prompt-overlay)))
+      (should (= banner-end-1 input-start-1))
+      (should (= overlay-start-1 input-start-1))
+      (should (< banner-start-1 banner-end-1))
+      ;; Second render with a different message
+      (setf (opencode-session-status opencode-session--session)
+            (opencode-status-create :type "retry"
+                                    :message "second message"
+                                    :attempt 2))
+      (opencode-session--render-retry-banner)
+      (let ((banner-start-2 (marker-position opencode-session--retry-banner-start))
+            (banner-end-2 (marker-position opencode-session--retry-banner-end))
+            (input-start-2 (marker-position opencode-session--input-start-marker))
+            (overlay-start-2 (overlay-start opencode-session--input-prompt-overlay)))
+        ;; The prompt must remain anchored after the banner.
+        (should (= banner-end-2 input-start-2))
+        (should (= overlay-start-2 input-start-2))
+        (should (< banner-start-2 banner-end-2))
+        ;; Buffer text reflects the latest message and contains no prefix.
+        (let ((banner-text (buffer-substring-no-properties
+                            banner-start-2 banner-end-2)))
+          (should (string-match-p "second message" banner-text))
+          (should-not (string-match-p "OpenCode:" banner-text)))))))
+
+(ert-deftest test-opencode-session-mode/retry-banner-clears-when-status-clears ()
+  "Banner is removed and markers reset when status leaves retry."
+  (with-temp-buffer
+    (opencode-session-mode)
+    (setq-local opencode-session--session
+                (opencode-session-create :id "test-session"))
+    (opencode-session--ensure-markers)
+    (opencode-session--ensure-input-region)
+    (setf (opencode-session-status opencode-session--session)
+          (opencode-status-create :type "retry" :message "boom" :attempt 1))
+    (opencode-session--render-retry-banner)
+    (should (markerp opencode-session--retry-banner-start))
+    (should (marker-position opencode-session--retry-banner-start))
+    (setf (opencode-session-status opencode-session--session)
+          (opencode-status-create :type "idle"))
+    (opencode-session--render-retry-banner)
+    (should (null opencode-session--retry-banner-start))
+    (should (null opencode-session--retry-banner-end))))
+
 (provide 'emacs-opencode-session-mode-test)
 
 ;;; emacs-opencode-session-mode-test.el ends here

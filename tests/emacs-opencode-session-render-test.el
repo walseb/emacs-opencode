@@ -412,6 +412,45 @@
   "Empty string passes through."
   (should (equal (opencode-session--align-markdown-tables "") "")))
 
+;;; retry-banner-text
+
+(ert-deftest test-opencode-render/retry-banner-text-non-retry ()
+  "Non-retry status returns nil."
+  (should (null (opencode-session--retry-banner-text
+                 (opencode-status-create :type "idle"))))
+  (should (null (opencode-session--retry-banner-text
+                 (opencode-status-create :type "busy")))))
+
+(ert-deftest test-opencode-render/retry-banner-text-message-and-attempt ()
+  "Retry banner includes the message and attempt without an OpenCode prefix."
+  (let* ((status (opencode-status-create
+                  :type "retry"
+                  :attempt 2
+                  :message "Free usage exceeded, subscribe to Go"))
+         (text (opencode-session--retry-banner-text status)))
+    (should (stringp text))
+    (should-not (string-prefix-p "OpenCode: " text))
+    (should (string-prefix-p "Free usage exceeded" text))
+    (should (string-match-p "attempt #2" text))))
+
+(ert-deftest test-opencode-render/retry-banner-text-includes-countdown ()
+  "Retry banner includes a countdown when next is supplied."
+  (let* ((next (+ (* 1000.0 (float-time)) 5000))
+         (status (opencode-status-create
+                  :type "retry"
+                  :attempt 1
+                  :message "Rate Limited"
+                  :next next))
+         (text (opencode-session--retry-banner-text status)))
+    (should (string-match-p "retrying in [0-9]+s" text))))
+
+(ert-deftest test-opencode-render/retry-banner-text-no-message ()
+  "Retry banner with no message falls back to a placeholder."
+  (let* ((status (opencode-status-create :type "retry"))
+         (text (opencode-session--retry-banner-text status)))
+    (should (stringp text))
+    (should (string-match-p "retrying" text))))
+
 (provide 'emacs-opencode-session-render-test)
 
 ;;; emacs-opencode-session-render-test.el ends here

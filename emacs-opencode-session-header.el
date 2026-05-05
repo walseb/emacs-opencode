@@ -8,6 +8,7 @@
 (require 'emacs-opencode-session)
 
 (declare-function opencode-session--ensure-providers "emacs-opencode-session-model")
+(declare-function opencode-session--render-retry-banner "emacs-opencode-session-render")
 
 (defcustom opencode-session-spinner-frames
   '("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
@@ -18,6 +19,11 @@
 (defcustom opencode-session-spinner-interval 0.1
   "Seconds between session header spinner frames."
   :type 'number
+  :group 'emacs-opencode)
+
+(defcustom opencode-session-header-retry-message-max 60
+  "Maximum width in characters for retry messages shown in the header."
+  :type 'integer
   :group 'emacs-opencode)
 
 (defface opencode-session-header-face
@@ -40,6 +46,11 @@
   "Face used for the active agent label."
   :group 'emacs-opencode)
 
+(defface opencode-session-error-face
+  '((t :inherit error))
+  "Face used for inline session error and retry messages."
+  :group 'emacs-opencode)
+
 (defvar opencode-session--spinner-timer nil
   "Timer used to animate session header spinners.")
 
@@ -50,12 +61,12 @@
   "Render the header line for the session."
   (let* ((title (or (opencode-session-title opencode-session--session)
                     "OpenCode Session"))
-          (status (or (opencode-session-status opencode-session--session)
-                      "idle"))
+          (status (opencode-session-status opencode-session--session))
           (agent opencode-session--agent)
           (agent-label (when (and agent (not (string-empty-p agent)))
                          (format "[%s]" agent)))
-          (status-label (opencode-session--header-status-label status))
+          (spinner (opencode-session--header-spinner-segment status))
+          (retry (opencode-session--header-retry-segment status))
           (right (opencode-session--header-right)))
     (setq header-line-format
           (opencode-session--align-header
@@ -64,11 +75,51 @@
                   (list (propertize title 'face 'opencode-session-header-face)
                         (when agent-label
                           (propertize agent-label 'face 'opencode-session-agent-face))
-                        (when (not (string-empty-p status-label))
-                          (propertize status-label
-                                      'face 'opencode-session-spinner-face))))
+                        spinner
+                        retry))
             " ")
            right))))
+
+(defun opencode-session--header-spinner-segment (status)
+  "Return the propertized spinner segment for STATUS, or nil."
+  (let ((label (opencode-session--header-status-label status)))
+    (unless (or (null label) (string-empty-p label))
+      (propertize label 'face 'opencode-session-spinner-face))))
+
+(defun opencode-session--header-retry-segment (status)
+  "Return a propertized retry segment for STATUS, or nil."
+  (when (and (opencode-status-p status)
+             (string= (or (opencode-status-type status) "") "retry"))
+    (let* ((message (opencode-status-message status))
+           (attempt (opencode-status-attempt status))
+           (next (opencode-status-next status))
+           (truncated (opencode-session--truncate-retry-message message))
+           (suffix (opencode-session--retry-countdown-suffix attempt next))
+           (text (string-join (delq nil (list truncated suffix)) " ")))
+      (unless (string-empty-p text)
+        (propertize text 'face 'opencode-session-error-face)))))
+
+(defun opencode-session--truncate-retry-message (message)
+  "Truncate MESSAGE for header display."
+  (when (and (stringp message) (not (string-empty-p message)))
+    (let ((max opencode-session-header-retry-message-max))
+      (if (and (numberp max) (> (length message) max))
+          (concat (substring message 0 (max 0 (- max 3))) "...")
+        message))))
+
+(defun opencode-session--retry-countdown-suffix (attempt next)
+  "Build a [#ATTEMPT, in Ns] suffix from ATTEMPT and NEXT.
+
+NEXT is in milliseconds since epoch, as sent by the server."
+  (let* ((parts nil))
+    (when (numberp attempt)
+      (push (format "#%d" attempt) parts))
+    (when (numberp next)
+      (let* ((now-ms (* 1000.0 (float-time)))
+             (remaining (max 0 (round (/ (- next now-ms) 1000.0)))))
+        (push (format "in %ds" remaining) parts)))
+    (when parts
+      (format "[%s]" (string-join (nreverse parts) ", ")))))
 
 (defun opencode-session--align-header (left right)
   "Align LEFT and RIGHT strings for the header line.
@@ -252,8 +303,11 @@ Most recently used first."
     ""))
 
 (defun opencode-session--status-busy-p (status)
-  "Return non-nil when STATUS should show a spinner."
-  (not (string= status "idle")))
+  "Return non-nil when STATUS should show a spinner.
+
+STATUS may be an `opencode-status' struct (preferred), a legacy
+string status type, or nil.  Nil and \"idle\" are not busy."
+  (opencode-status-busy-p status))
 
 (defun opencode-session--spinner-frame ()
   "Return the current spinner frame.
@@ -269,18 +323,21 @@ Fallback to a plain busy label when frames are unavailable."
       "busy")))
 
 (defun opencode-session--advance-spinner ()
-  "Advance spinner frames for visible session buffers."
+  "Advance spinner frames for visible session buffers.
+
+Also re-renders the header and the inline retry banner so the retry
+countdown stays accurate while the timer is running."
   (maphash
    (lambda (_session-id buffer)
      (when (buffer-live-p buffer)
        (with-current-buffer buffer
          (when (and opencode-session--session
                     (opencode-session--status-busy-p
-                     (or (opencode-session-status opencode-session--session)
-                         "idle")))
+                     (opencode-session-status opencode-session--session)))
            (setq opencode-session--spinner-index
                  (1+ opencode-session--spinner-index))
-           (opencode-session--render-header)))))
+           (opencode-session--render-header)
+           (opencode-session--render-retry-banner)))))
    opencode-session--buffers))
 
 (defun opencode-session--maybe-start-spinner ()
@@ -307,8 +364,7 @@ Fallback to a plain busy label when frames are unavailable."
          (with-current-buffer buffer
            (when (and opencode-session--session
                       (opencode-session--status-busy-p
-                       (or (opencode-session-status opencode-session--session)
-                           "idle")))
+                       (opencode-session-status opencode-session--session)))
              (setq busy t)))))
      opencode-session--buffers)
     busy))
