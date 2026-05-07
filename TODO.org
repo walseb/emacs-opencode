@@ -1,4 +1,5 @@
 #+TITLE: Emacs OpenCode TODO
+
 * TODO Surface =tui.toast.show= events
 The OpenCode server forwards every bus event over the SSE stream
 via =Bus.subscribeAll=, including =tui.toast.show= events used by the
@@ -11,24 +12,23 @@ The TUI prompts the user via a confirm dialog and runs an upgrade.
 At minimum we should =message= the user; eventually a customizable
 hook so users can wire it to whatever update flow they prefer.
 
-* DONE make it so toggling open a shell block output doesn't auto-close when new shell output streams in
-CLOSED: [2026-03-25 Wed]
-* TODO fix issue where you can't scroll around when a response is streaming in
-* DONE Render markdown tables with aligned columns
-CLOSED: [2026-04-02 Thu]
-Rewrite table text at render time: detect consecutive `|...|` lines, measure max column widths, and pad cells.
-* TODO handle emphasis (**thing**) in font-lock
+* TODO Fix issue where you can't scroll around when a response is streaming in
+
+* TODO Handle emphasis (=**thing**=) in font-lock
+
 * IN PROGRESS completion-at-point in session buffer input
-- slash commands
-- @agent
+- slash commands (done)
+- @agent (done)
 - file paths, once @file is supported
- - completion providers should be pluggable so new triggers (@agent, @file, !shell) can be added
- - slash completion only triggers when the input begins with optional whitespace followed by "/"
-* DONE Support @-mentioning agents
-CLOSED: [2026-03-04 Wed]
+- completion providers should be pluggable so new triggers (@agent, @file, !shell) can be added
+- slash completion only triggers when the input begins with optional whitespace followed by "/"
+
 * TODO Support @file mentions (inlines file contents into prompt)
+
 * TODO Fix unclear wording for permission requests
-E.g. "OpenCode wants to rg foobar .*" or "OpenCode wants to foo/bar/baz.txt". What do those mean?
+E.g. "OpenCode wants to rg foobar .*" or "OpenCode wants to foo/bar/baz.txt".
+What do those mean?
+
 * TODO Overview buffers (sessions/projects)
 - List-returning functions for sessions/projects.
 - Thin rendering buffer(s) + completion integration.
@@ -36,143 +36,130 @@ E.g. "OpenCode wants to rg foobar .*" or "OpenCode wants to foo/bar/baz.txt". Wh
 * TODO Session management commands
 - Load session, fork, delete, rename.
 
-* IN PROGRESS Address poor performance of SSE buffer/event dispatch
-- already implemented: we now only JSON-parse events with registered handlers
-- there is probably still more room to improve here
-- further improvements made:
-  - we totally skip processing events without registered handlers now
-  - made handler run sync by default instead of queueing via run-at-time 0
-  - switched to url-retrieve request.el backend instead of curl, which seemed to speed up localhost network calls
 * TODO Add newline before "block level" message parts if they are the first part of the message and there isn't a blank line above
-* DONE add tests
-CLOSED: [2026-03-04 Wed 10:01]
-* DONE Support !shell command mentions (inlines shell command output into prompt)
+
+* Archive
+** DONE Address poor performance of SSE buffer/event dispatch
+CLOSED: [2026-04-15 Wed]
+- Only JSON-parse events with registered handlers
+- Skip processing events without registered handlers entirely
+- Made handler dispatch run sync by default instead of queueing via run-at-time 0
+- Switched to url-retrieve request.el backend for HTTP calls
+- Added a JS bridge (=opencode-sse-bridge.js=, run under bun/node) that
+  parses SSE, filters by registered event types, and strips known-large
+  fields, emitting one JSON line per event to Emacs.
+
+** DONE Make it so toggling open a shell block output doesn't auto-close when new shell output streams in
+CLOSED: [2026-03-25 Wed]
+
+** DONE Render markdown tables with aligned columns
+CLOSED: [2026-04-02 Thu]
+Rewrite table text at render time: detect consecutive =|...|= lines, measure
+max column widths, and pad cells.
+
+** DONE Support @-mentioning agents
 CLOSED: [2026-03-04 Wed]
-* DONE Font lock in session buffers
+
+** DONE Add tests
+CLOSED: [2026-03-04 Wed 10:01]
+
+** DONE Support !shell command mentions (inlines shell command output into prompt)
+CLOSED: [2026-03-04 Wed]
+
+** DONE Font lock in session buffers
 CLOSED: [2026-02-25 Tue]
-Should syntax highlight markdown and display diffs from the patch tool with diff syntax highlighting.
-* DONE Add support for managing LLM providers/connections
+Should syntax highlight markdown and display diffs from the patch tool with
+diff syntax highlighting.
+
+** DONE Add support for managing LLM providers/connections
 CLOSED: [2026-02-18 Wed 17:37]
-* DONE Support showing reasoning blocks
+
+** DONE Support showing reasoning blocks
 CLOSED: [2026-02-19 Thu 20:38]
-* DONE Display tool call errors in the session buffer
+
+** DONE Display tool call errors in the session buffer
 CLOSED: [2026-02-05 Thu 11:46]
-* DONE Support slash commands in the session buffer
+
+** DONE Support slash commands in the session buffer
 CLOSED: [2026-02-03 Tue 16:46]
-* DONE Show token usage metadata in session buffer
+
+** DONE Show token usage metadata in session buffer
 CLOSED: [2026-01-31 Sat 00:45]
-* DONE Show shell command being run in shell tool call
+
+** DONE Show shell command being run in shell tool call
 CLOSED: [2026-01-30 Fri 16:52]
-* DONE Sometimes multiple "Read" tool calls end up on the same line
+
+** DONE Sometimes multiple "Read" tool calls end up on the same line
 CLOSED: [2026-01-30 Fri 13:42]
-* DONE Handle diff in edit tool calls
+
+** DONE Handle diff in edit tool calls
 CLOSED: [2026-01-30 Fri 16:35]
 - Show the diff after each edit like the TUI
 
-* DONE Make the session buffer look pretty
+** DONE Make the session buffer look pretty
 CLOSED: [2026-01-30 Fri 15:12]
 With colors!
 
-* DONE Handle sub-agents/sub-sessions
+** DONE Handle sub-agents/sub-sessions
 CLOSED: [2026-01-30 Fri 13:13]
-* DONE Buffer-aware commands
+
+** DONE Buffer-aware commands
 CLOSED: [2026-01-30 Fri 13:12]
-** DONE Ask about region/point/file context.
+*** DONE Ask about region/point/file context
 CLOSED: [2026-01-29 Thu 17:04]
-** DONE Apply edits to selection or buffer.
+*** DONE Apply edits to selection or buffer
 CLOSED: [2026-01-30 Fri 13:12]
-** DONE send context to existing session buffers, not just new ones
+*** DONE Send context to existing session buffers, not just new ones
 CLOSED: [2026-01-30 Fri 13:12]
 
-The interface for this is something like: an opencode-ask command, which when run in a buffer asks for a prompt, then sends that prompt to a new opencode session for the project the buffer is in (prompting for a directory to run opencode in if the buffer is not in a project).
-
-The prompt will embed some context around point (or the region if there is one).
-
-This will require building out some additional functionality:
-- a function to open a new opencode session with a prompt that intelligently finds/starts the opencode connection
-- (optional) a minor mode with keybindings for the in-buffer contextual commands
-
-* DONE Make open-session reuse the existing session buffer if there is one
+** DONE Make open-session reuse the existing session buffer if there is one
 CLOSED: [2026-01-30 Fri 12:45]
-* DONE Give connections a unique port so we can have multiple open connections
+
+** DONE Give connections a unique port so we can have multiple open connections
 CLOSED: [2026-01-30 Fri 12:41]
-* DONE Emacs tool integration (MCP)
+
+** DONE Emacs tool integration (MCP)
 CLOSED: [2026-01-30 Fri 01:08]
 - Expose Emacs access to OpenCode tools.
 
-* DONE Handle question functionality
+** DONE Handle question functionality
 CLOSED: [2026-01-29 Thu 14:19]
-- question.asked SSE
-- should prompt the user in emacs via completing-read, with an option to type your own answer
+- =question.asked= SSE
+- Prompts the user in Emacs via =completing-read=, with an option to type
+  your own answer.
 
-Example SSE:
-#+begin_src
-data: {"type":"question.asked","properties":{"id":"que_c055308d8001R7q6izrlXP4nzo","sessionID":"ses_3faad41e4ffe8JF0e2lLG0y24o","questions":[{"question":"For tool parts rendering, do you want them inline with message text or as a distinct block (e.g., `[tool]` header + status/output)?","header":"Tool UI","options":[{"label":"Distinct block (Recommended)","description":"Render tool parts as separate block below message content."},{"label":"Inline text","description":"Mix tool info into the message text flow."},{"label":"Other","description":"Specify custom formatting or placement."}]},{"question":"Should tool output be fully rendered or summarized (e.g., first line + truncated)?","header":"Output","options":[{"label":"Summarized (Recommended)","description":"Show brief output with truncation indicator."},{"label":"Full output","description":"Render full tool output in buffer."},{"label":"Other","description":"Specify custom truncation rules."}]}],"tool":{"messageID":"msg_c0552ed20002Z70IEWVcsE36dF","callID":"call_twQ1UXrHcS2qpL0epHDBKXsw"}}}
-#+end_src
-* DONE Handle permission requests
+** DONE Handle permission requests
 CLOSED: [2026-01-29 Thu 10:39]
-SSE shape:
-#+begin_src
-data: {"type":"permission.asked","properties":{"id":"per_c07cae9e70018qPP3AI5xni7y0","sessionID":"ses_3f83afb92ffeWdWJLvwmUlnx0e","permission":"external_directory","patterns":["/Users/jdormit/opencode/*"],"metadata":{"filepath":"/Users/jdormit/opencode","parentDir":"/Users/jdormit/opencode"},"always":["/Users/jdormit/opencode/*"],"tool":{"messageID":"msg_c07cad1970027lMlJoSlY7t8wi","callID":"call_TeppexgaMwOtZxfQpX3miTJN"}}}
-#+end_src
-* DONE Add command to send interrupt to opencode
+
+** DONE Add command to send interrupt to opencode
 CLOSED: [2026-01-29 Thu 00:15]
-* DONE Current Goal: Vertical Slice (Launch → Chat → Stream)
-** DONE Start opencode serve subprocess in CWD
-- Spawn opencode with --serve (or opencode serve) and capture host/port.
-- Track process lifecycle and allow stop/restart.
 
-** DONE Implement minimal HTTP client (request.el)
-- Base URL, health check (/global/health).
-- Create session (/session).
-- Send prompt async (/session/:id/prompt_async).
+** DONE Vertical Slice (Launch → Chat → Stream)
+CLOSED: [2026-01-28 Wed]
+Initial milestone: spawn =opencode serve=, implement minimal HTTP client
+(health, session create, prompt async), connect to =/event= SSE stream,
+define =opencode-session-mode=, implement =M-x opencode= and shutdown.
 
-** DONE Implement SSE stream handling
-- Connect to /event for the active session.
-- Parse SSE frames and extract message parts.
-- Dispatch events to UI and handler registry.
-
-** DONE Create opencode-session mode
-- Define major mode and buffer layout.
-- Buffer naming uses OpenCode session title.
-- Input submission command to send prompts.
-- Append streaming output as it arrives.
-
-** DONE Implement M-x opencode command
-- Orchestrate server start, health check, session create.
-- Open chat buffer and connect stream.
-
-** DONE Implement shutdown command
-- Interactive completion over active connections.
-- Stop process and clean registry.
-
-* DONE Handle todo list functionality
+** DONE Handle todo list functionality
 CLOSED: [2026-01-28 Wed 22:40]
-- todo.updated SSE
-- should show the todo list with done items checked off
+- =todo.updated= SSE renders the todo list with done items checked off.
 
-Example SSE:
-#+begin_src
-data: {"type":"todo.updated","properties":{"sessionID":"ses_3fabc1211ffecnI8SVTEFxUGDf","todos":[{"id":"1","content":"Review session/mode SSE handling spots","status":"completed","priority":"high"},{"id":"2","content":"Design plan/build mode state + header","status":"in_progress","priority":"high"},{"id":"3","content":"Plan tool-part rendering + diff display","status":"pending","priority":"high"},{"id":"4","content":"Plan file event handlers + buffer revert","status":"pending","priority":"high"},{"id":"5","content":"Update TODO.org milestones","status":"pending","priority":"medium"}]}}
-#+end_src
-* DONE SSE event handlers API
+** DONE SSE event handlers API
 CLOSED: [2026-01-28 Wed 10:54]
-- Define a handler registry for event types.
-- Dispatch SSE events to named Emacs hooks.
+- Handler registry for event types; dispatch SSE events to named Emacs hooks.
 
-* DONE Auto-reload edited buffers
+** DONE Auto-reload edited buffers
 CLOSED: [2026-01-28 Wed 12:53]
-- Register global handlers for file.edited and file.watcher.updated.
-- Revert visiting buffers when their file is updated.
+- Global handlers for =file.edited= and =file.watcher.updated=; revert
+  visiting buffers when their file is updated.
 
-* DONE Render tool parts
+** DONE Render tool parts
 CLOSED: [2026-01-28 Wed 11:10]
-- Render message parts with type "tool" in the session buffer.
-- Include tool name, status, and output summary.
+- Render message parts with type "tool" in the session buffer (name, status,
+  output summary).
 
-* DONE Agent selection + header indicator
+** DONE Agent selection + header indicator
 CLOSED: [2026-01-28 Wed 12:53]
-- Track available agents on connection.
-- Buffer-local agent state in session mode (select + cycle commands).
-- Show active agent in session header.
-- Send agent name with prompt requests.
+- Track available agents on connection; buffer-local agent state in session
+  mode (select + cycle commands); show active agent in session header; send
+  agent name with prompt requests.

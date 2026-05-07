@@ -30,9 +30,22 @@ amount of local state needed for a smooth editing experience.
   - All HTTP requests flow through `opencode-request`, which builds URLs from
     the connection base URL and applies auth headers/timeouts.
 - Streaming
-  - SSE uses a dedicated curl process and buffer, with a small parser state
-    machine that collects data lines and dispatches decoded JSON payloads.
-  - Large diff payloads are intentionally skipped to keep parsing fast.
+  - SSE streaming runs in a dedicated subprocess to keep parsing off the
+    Emacs main loop. Two backends are supported:
+    - Preferred: a small JS bridge (`opencode-sse-bridge.js`, run under
+      `bun` or `node`) that connects to `/event`, parses the SSE stream,
+      filters by the set of event types Emacs has registered handlers for,
+      strips known-large fields (e.g. `session.diff`, `summary.diffs`) that
+      the Emacs client never reads, and emits one compact JSON line per
+      event to stdout. Emacs reads complete lines from the bridge's stdout
+      and `json-parse`s each one, with no fragment accumulation needed on
+      the Emacs side.
+    - Fallback: a `curl` process whose output is fed through an in-Emacs
+      incremental SSE parser that handles the `data: …\n\n` framing.
+  - Both backends skip events with no registered Emacs handler — the
+    bridge does not forward them at all, and the curl backend drops their
+    chunks without parsing — to avoid spending time and memory on payloads
+    that would be discarded anyway.
 - Session UI
   - Session buffers are backed by model structs and maintain message parts,
     markers for the input region, and header rendering state.
