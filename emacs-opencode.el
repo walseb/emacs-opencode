@@ -5,6 +5,7 @@
 (require 'subr-x)
 (require 'emacs-opencode-connection)
 (require 'emacs-opencode-client)
+(require 'emacs-opencode-run)
 (require 'emacs-opencode-session)
 (require 'emacs-opencode-session-mode)
 

@@ -72,6 +72,48 @@ All commands auto-detect the current project root. Use a prefix argument
 Under =evil-mode=, =TAB= and =S-TAB= (or =<backtab>=) cycle to the next and
 previous agent in normal and insert states.
 
+* Lisp API
+
+** =opencode-run=
+
+Run a one-shot =opencode run= prompt asynchronously from elisp, without
+opening a session buffer. Useful for scripting and building your own commands
+on top of OpenCode.
+
+#+begin_src emacs-lisp
+(opencode-run PROMPT CALLBACK
+              &key model agent command dangerously-skip-permissions)
+#+end_src
+
+=PROMPT= is the message string to send. =CALLBACK= is invoked when the process
+finishes. Its arity is inspected automatically: a callback that accepts two or
+more arguments receives =(OUTPUT SUCCESS-P)=, while a single-argument callback
+receives just =OUTPUT=. =OUTPUT= is the model's plain-text answer (the
+formatted header and ANSI control sequences OpenCode writes to standard error
+are discarded, and trailing whitespace is trimmed). =SUCCESS-P= is non-nil when
+the process exited successfully.
+
+The keyword arguments map to the corresponding =opencode run= CLI flags:
+
+| Keyword                          | Flag                              |
+|----------------------------------+-----------------------------------|
+| =:model=                         | =--model=                         |
+| =:agent=                         | =--agent=                         |
+| =:command=                       | =--command=                       |
+| =:dangerously-skip-permissions=  | =--dangerously-skip-permissions=  |
+
+The command runs in =default-directory=; bind it to control where OpenCode
+runs.
+
+#+begin_src emacs-lisp
+(let ((default-directory "~/my-project/"))
+  (opencode-run "How many Rs are in strawberry?"
+                (lambda (output success-p)
+                  (when success-p
+                    (message "%s" output)))
+                :agent "build"))
+#+end_src
+
 * Customization
 
 All options are in the =emacs-opencode= customize group.
