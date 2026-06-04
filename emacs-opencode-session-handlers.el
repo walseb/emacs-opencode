@@ -243,10 +243,9 @@ PARENT-SESSION-ID is the session that owns the task tool part."
          (fallback (if kind (format "use %s" kind) "proceed")))
     (format "OpenCode wants to %s: " (or detail fallback))))
 
-(defun opencode-session--prompt-permission (permission)
-  "Prompt for PERMISSION and send a response."
+(defun opencode-session--prompt-permission (permission connection)
+  "Prompt for PERMISSION and send a response via CONNECTION."
   (let* ((request-id (alist-get 'id permission))
-         (session-id (alist-get 'sessionID permission))
          (choices '("Allow once" "Allow always" "Deny"))
          (prompt (opencode-session--permission-prompt-label permission))
          (selection (condition-case nil
@@ -256,12 +255,12 @@ PARENT-SESSION-ID is the session that owns the task tool part."
                  ((string= selection "Allow always") "always")
                  ((string= selection "Allow once") "once")
                  (t "reject"))))
-    (unless opencode-session--connection
+    (unless connection
       (error "OpenCode session is not connected"))
     (unless request-id
       (error "OpenCode permission request is missing ID"))
     (opencode-client-permission-reply
-     opencode-session--connection
+     connection
      request-id
      reply
      :success (lambda (&rest _args)
@@ -269,20 +268,29 @@ PARENT-SESSION-ID is the session that owns the task tool part."
      :error (lambda (&rest _args)
               (message "OpenCode: failed to reply to permission request")))))
 
-(defun opencode-session--handle-permission-asked (_event data)
-  "Handle the permission.asked SSE DATA.
-Falls back to any live session buffer when SESSION-ID is unknown,
-e.g. for permission requests originating from subagent sessions.
-Defers to a timer so `completing-read' does not block the process filter."
+(defun opencode-session--handle-permission-asked (_event data meta)
+  "Handle the permission.asked SSE DATA arriving with META.
+META is a plist carrying `:connection', the connection on which
+the event arrived; the reply is always routed back to that
+connection so multi-server setups respond to the correct server.
+
+Falls back to any live session buffer on the same connection when
+SESSION-ID is unknown, e.g. for permission requests originating
+from subagent sessions.  Defers to a timer so `completing-read'
+does not block the process filter."
   (let* ((permission (alist-get 'properties data))
-         (session-id (alist-get 'sessionID permission)))
+         (session-id (alist-get 'sessionID permission))
+         (connection (plist-get meta :connection)))
     (run-at-time 0 nil
      (lambda ()
-       (when-let ((buffer (or (opencode-session--buffer-for-session session-id)
-                              (opencode-session--any-live-session-buffer))))
-         (when (buffer-live-p buffer)
-           (with-current-buffer buffer
-             (opencode-session--prompt-permission permission))))))))
+       (let ((buffer (or (opencode-session--buffer-for-session session-id)
+                         (opencode-session--any-live-session-buffer connection))))
+         (if (and buffer (buffer-live-p buffer))
+             (with-current-buffer buffer
+               (opencode-session--prompt-permission permission connection))
+           ;; No buffer to host the prompt, but we can still reply via
+           ;; the originating connection.
+           (opencode-session--prompt-permission permission connection)))))))
 
 ;;; Question handling
 
@@ -357,28 +365,27 @@ Returns a list of answer strings."
               (opencode-session--question-read-single question)))
           questions))
 
-(defun opencode-session--prompt-question (payload)
-  "Prompt for question PAYLOAD and send a response."
+(defun opencode-session--prompt-question (payload connection)
+  "Prompt for question PAYLOAD and send a response via CONNECTION."
   (let* ((request-id (alist-get 'id payload))
-         (session-id (alist-get 'sessionID payload))
          (questions (opencode-session--question-list (alist-get 'questions payload)))
          (answers (condition-case nil
                       (opencode-session--question-answers questions)
                     (quit :reject))))
-    (unless opencode-session--connection
+    (unless connection
       (error "OpenCode session is not connected"))
     (unless request-id
       (error "OpenCode question request is missing ID"))
     (if (eq answers :reject)
         (opencode-client-question-reject
-         opencode-session--connection
+         connection
          request-id
          :success (lambda (&rest _args)
                     (message "OpenCode question rejected"))
          :error (lambda (&rest _args)
                   (message "OpenCode: failed to reject question")))
       (opencode-client-question-reply
-       opencode-session--connection
+       connection
        request-id
        answers
        :success (lambda (&rest _args)
@@ -386,23 +393,27 @@ Returns a list of answer strings."
        :error (lambda (&rest _args)
                 (message "OpenCode: failed to reply to question"))))))
 
-(defun opencode-session--handle-question-asked (_event data)
-  "Handle the question.asked SSE DATA.
-Falls back to any live session buffer when SESSION-ID is unknown,
-e.g. for questions originating from subagent sessions.
-Defers to a timer so `completing-read' does not block the process filter."
+(defun opencode-session--handle-question-asked (_event data meta)
+  "Handle the question.asked SSE DATA arriving with META.
+META is a plist carrying `:connection', the connection on which
+the event arrived; the reply is always routed back to that
+connection so multi-server setups respond to the correct server.
+
+Falls back to any live session buffer on the same connection when
+SESSION-ID is unknown, e.g. for questions originating from
+subagent sessions.  Defers to a timer so `completing-read' does
+not block the process filter."
   (let* ((question (alist-get 'properties data))
          (session-id (alist-get 'sessionID question))
-         (request-id (alist-get 'id question)))
+         (connection (plist-get meta :connection)))
     (run-at-time 0 nil
      (lambda ()
-       (message "OpenCode: question.asked for %s (session %s)" request-id session-id)
-       (when-let ((buffer (or (opencode-session--buffer-for-session session-id)
-                              (opencode-session--any-live-session-buffer))))
-         (when (buffer-live-p buffer)
-           (with-current-buffer buffer
-             (message "OpenCode: prompting question %s in %s" request-id (buffer-name))
-             (opencode-session--prompt-question question))))))))
+       (let ((buffer (or (opencode-session--buffer-for-session session-id)
+                         (opencode-session--any-live-session-buffer connection))))
+         (if (and buffer (buffer-live-p buffer))
+             (with-current-buffer buffer
+               (opencode-session--prompt-question question connection))
+           (opencode-session--prompt-question question connection)))))))
 
 ;;; File revert handling
 
@@ -482,40 +493,40 @@ Returns nil when PATH is not a string."
 
 ;;; Handler registrations
 
-(opencode-sse-define-handler session-created "session.created" (_event data)
+(opencode-sse-define-handler session-created "session.created" (_event data _meta)
   (opencode-session--handle-session-created _event data))
 
-(opencode-sse-define-handler session-updated "session.updated" (_event data)
+(opencode-sse-define-handler session-updated "session.updated" (_event data _meta)
   (opencode-session--handle-session-updated _event data))
 
-(opencode-sse-define-handler session-status "session.status" (_event data)
+(opencode-sse-define-handler session-status "session.status" (_event data _meta)
   (opencode-session--handle-session-status _event data))
 
-(opencode-sse-define-handler session-idle "session.idle" (_event data)
+(opencode-sse-define-handler session-idle "session.idle" (_event data _meta)
   (opencode-session--handle-session-idle _event data))
 
-(opencode-sse-define-handler session-error "session.error" (_event data)
+(opencode-sse-define-handler session-error "session.error" (_event data _meta)
   (opencode-session--handle-session-error _event data))
 
-(opencode-sse-define-handler permission-asked "permission.asked" (_event data)
-  (opencode-session--handle-permission-asked _event data))
+(opencode-sse-define-handler permission-asked "permission.asked" (_event data meta)
+  (opencode-session--handle-permission-asked _event data meta))
 
-(opencode-sse-define-handler question-asked "question.asked" (_event data)
-  (opencode-session--handle-question-asked _event data))
+(opencode-sse-define-handler question-asked "question.asked" (_event data meta)
+  (opencode-session--handle-question-asked _event data meta))
 
-(opencode-sse-define-handler message-updated "message.updated" (_event data)
+(opencode-sse-define-handler message-updated "message.updated" (_event data _meta)
   (opencode-session--handle-message-updated _event data))
 
-(opencode-sse-define-handler message-part-updated "message.part.updated" (_event data)
+(opencode-sse-define-handler message-part-updated "message.part.updated" (_event data _meta)
   (opencode-session--handle-message-part-updated _event data))
 
-(opencode-sse-define-handler message-part-delta "message.part.delta" (_event data)
+(opencode-sse-define-handler message-part-delta "message.part.delta" (_event data _meta)
   (opencode-session--handle-message-part-delta _event data))
 
-(opencode-sse-define-handler file-edited "file.edited" (_event data)
+(opencode-sse-define-handler file-edited "file.edited" (_event data _meta)
   (opencode-session--handle-file-updated _event data))
 
-(opencode-sse-define-handler file-watcher-updated "file.watcher.updated" (_event data)
+(opencode-sse-define-handler file-watcher-updated "file.watcher.updated" (_event data _meta)
   (opencode-session--handle-file-updated _event data))
 
 ;; TODO: handle additional bus events that the server publishes via

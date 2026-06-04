@@ -1,6 +1,7 @@
 ;;; emacs-opencode-session-handlers-test.el --- Tests for SSE event handlers  -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'cl-lib)
 (require 'emacs-opencode-session-handlers)
 
 ;;; session-error-text
@@ -221,6 +222,92 @@
   ;; the function returns nil via the (listp paths) branch.
   (should (null (opencode-session--event-file-paths
                  '((properties . ((other . "x"))))))))
+
+;;; permission/question reply routing by connection
+
+(defmacro opencode-handlers-test--with-sync-timer (&rest body)
+  "Evaluate BODY with `run-at-time' running its function synchronously.
+This lets handler tests observe the deferred prompt without a real timer."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'run-at-time)
+              (lambda (_secs _repeat fn &rest args)
+                (apply fn args))))
+     ,@body))
+
+(ert-deftest test-opencode-handlers/permission-reply-routes-to-event-connection ()
+  "A subagent permission reply is sent via the connection that asked.
+Even when an unrelated buffer on a different connection exists, the
+reply must go to the originating connection, not an arbitrary buffer."
+  (let ((opencode-session--buffers (make-hash-table :test 'equal))
+        (event-conn 'conn-asking)
+        (other-conn 'conn-other)
+        (other-buf (generate-new-buffer " *oc-test-other-conn*"))
+        (replied-conn :unset)
+        (replied-id :unset))
+    (unwind-protect
+        (progn
+          ;; A buffer belonging to a DIFFERENT connection is registered.
+          (with-current-buffer other-buf
+            (setq-local opencode-session--connection other-conn))
+          (puthash "other-session" other-buf opencode-session--buffers)
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (&rest _) "Allow once"))
+                    ((symbol-function 'opencode-client-permission-reply)
+                     (lambda (conn request-id _reply &rest _args)
+                       (setq replied-conn conn
+                             replied-id request-id))))
+            (opencode-handlers-test--with-sync-timer
+              (opencode-session--handle-permission-asked
+               "permission.asked"
+               '((properties . ((id . "per_123")
+                                 (sessionID . "sub_agent_session")
+                                 (permission . "read")
+                                 (metadata . ((filePath . "x.el"))))))
+               (list :connection event-conn))))
+          (should (eq replied-conn event-conn))
+          (should (equal replied-id "per_123")))
+      (kill-buffer other-buf))))
+
+(ert-deftest test-opencode-handlers/permission-reply-no-buffer-still-replies ()
+  "With no buffer at all, the reply still goes via the event connection."
+  (let ((opencode-session--buffers (make-hash-table :test 'equal))
+        (event-conn 'conn-asking)
+        (replied-conn :unset))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) "Allow always"))
+              ((symbol-function 'opencode-client-permission-reply)
+               (lambda (conn _request-id reply &rest _args)
+                 (setq replied-conn (cons conn reply)))))
+      (opencode-handlers-test--with-sync-timer
+        (opencode-session--handle-permission-asked
+         "permission.asked"
+         '((properties . ((id . "per_456")
+                           (sessionID . "sub_agent_session")
+                           (permission . "read"))))
+         (list :connection event-conn))))
+    (should (equal replied-conn (cons event-conn "always")))))
+
+(ert-deftest test-opencode-handlers/question-reply-routes-to-event-connection ()
+  "A subagent question reply is sent via the connection that asked."
+  (let ((opencode-session--buffers (make-hash-table :test 'equal))
+        (event-conn 'conn-asking)
+        (replied-conn :unset)
+        (replied-id :unset))
+    (cl-letf (((symbol-function 'opencode-session--question-answers)
+               (lambda (&rest _) '(("Yes"))))
+              ((symbol-function 'opencode-client-question-reply)
+               (lambda (conn request-id _answers &rest _args)
+                 (setq replied-conn conn
+                       replied-id request-id))))
+      (opencode-handlers-test--with-sync-timer
+        (opencode-session--handle-question-asked
+         "question.asked"
+         '((properties . ((id . "qst_789")
+                           (sessionID . "sub_agent_session")
+                           (questions . [((question . "Pick") (options . [((label . "Yes"))]))]))))
+         (list :connection event-conn))))
+    (should (eq replied-conn event-conn))
+    (should (equal replied-id "qst_789"))))
 
 (provide 'emacs-opencode-session-handlers-test)
 

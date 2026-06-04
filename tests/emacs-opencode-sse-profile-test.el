@@ -234,7 +234,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "profile.test"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     (opencode-sse--process-chunk
      conn "data: {\"type\":\"profile.test\",\"v\":1}\n\n")
     ;; Handler was called
@@ -311,7 +311,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "quiet.test"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     (opencode-sse--process-chunk
      conn "data: {\"type\":\"quiet.test\",\"v\":1}\n\n")
     ;; Handler still called

@@ -136,7 +136,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "session.created"
-     (lambda (_event data)
+     (lambda (_event data _meta)
        (setq dispatched data)))
     (opencode-sse--process-chunk
      conn
@@ -152,7 +152,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "msg.update"
-     (lambda (_event data)
+     (lambda (_event data _meta)
        (setq dispatched data)))
     (opencode-sse--process-chunk conn "data: {\"type\":\"msg.up")
     (should (null dispatched))
@@ -168,7 +168,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "split.test"
-     (lambda (_event data)
+     (lambda (_event data _meta)
        (setq dispatched data)))
     ;; First chunk: data line ending with \n (first \n of boundary).
     (opencode-sse--process-chunk
@@ -187,10 +187,10 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "ev.one"
-     (lambda (_event data) (push (cons 'one data) results)))
+     (lambda (_event data _meta) (push (cons 'one data) results)))
     (opencode-sse-register-handler
      "ev.two"
-     (lambda (_event data) (push (cons 'two data) results)))
+     (lambda (_event data _meta) (push (cons 'two data) results)))
     (opencode-sse--process-chunk
      conn
      (concat "data: {\"type\":\"ev.one\",\"n\":1}\n\n"
@@ -242,7 +242,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "message.created"
-     (lambda (_event data)
+     (lambda (_event data _meta)
        (setq dispatched data)))
     ;; Unhandled event with split boundary — enters drop mode.
     (opencode-sse--process-chunk
@@ -280,7 +280,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "good.event"
-     (lambda (_event data) (push data results)))
+     (lambda (_event data _meta) (push data results)))
     ;; Unhandled event, then two handled events in one chunk.
     (opencode-sse--process-chunk
      conn
@@ -298,7 +298,7 @@
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler "msg.updated" (lambda (_e _d)))
+    (opencode-sse-register-handler "msg.updated" (lambda (_e _d _m)))
     ;; Simulate a large data line arriving in multiple chunks.
     (opencode-sse--process-chunk conn "data: {\"type\":\"msg")
     (should (equal (opencode-sse--read-state conn :fragments)
@@ -318,7 +318,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "msg.updated"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     ;; Three chunks without newlines.
     (opencode-sse--process-chunk conn "data: {\"type\":\"msg")
     (opencode-sse--process-chunk conn ".updated\",\"x\":")
@@ -337,7 +337,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "big.event"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     (opencode-sse--process-chunk conn "data: {\"type\":\"big.event\",\"v\":\"")
     (dotimes (_ 100)
       (opencode-sse--process-chunk conn "x"))
@@ -353,7 +353,7 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "mid.test"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     ;; First chunk has no newline.
     (opencode-sse--process-chunk conn "data: {\"type\":\"mid.t")
     (should (equal (opencode-sse--read-state conn :fragments)
@@ -372,7 +372,7 @@
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler "exact.test" (lambda (_e _d)))
+    (opencode-sse-register-handler "exact.test" (lambda (_e _d _m)))
     (opencode-sse--process-chunk conn "data: {\"type\":\"exact.test\"}\n\n")
     (should (null (opencode-sse--read-state conn :fragments)))
     (should (null (opencode-sse--read-state conn :trailing-nl)))))
@@ -384,7 +384,7 @@
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler "trail.test" (lambda (_e _d)))
+    (opencode-sse-register-handler "trail.test" (lambda (_e _d _m)))
     ;; Chunk without trailing newline.
     (opencode-sse--process-chunk conn "data: {\"type\":\"trail.test\"")
     (should-not (opencode-sse--read-state conn :trailing-nl))
@@ -397,7 +397,7 @@
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler "fp.test" (lambda (_e _d)))
+    (opencode-sse-register-handler "fp.test" (lambda (_e _d _m)))
     (opencode-sse--process-chunk conn "data: {\"type\":\"fp.test\",\"x\":1}")
     (should-not (opencode-sse--read-state conn :trailing-nl))))
 
@@ -409,9 +409,29 @@
         (result nil))
     (opencode-sse-register-handler
      "test.event"
-     (lambda (_event data) (setq result data)))
+     (lambda (_event data _meta) (setq result data)))
     (opencode-sse--dispatch "test.event" '((key . "value")))
     (should (equal (alist-get 'key result) "value"))))
+
+(ert-deftest test-opencode-sse/dispatch-passes-meta ()
+  "Dispatch forwards the META plist (with :connection) to handlers."
+  (let ((opencode-sse--handlers nil)
+        (received-meta :unset))
+    (opencode-sse-register-handler
+     "meta.event"
+     (lambda (_event _data meta) (setq received-meta meta)))
+    (opencode-sse--dispatch "meta.event" nil '(:connection conn-a))
+    (should (eq (plist-get received-meta :connection) 'conn-a))))
+
+(ert-deftest test-opencode-sse/dispatch-meta-defaults-nil ()
+  "Dispatch passes nil META when none is provided."
+  (let ((opencode-sse--handlers nil)
+        (received-meta :unset))
+    (opencode-sse-register-handler
+     "meta.default"
+     (lambda (_event _data meta) (setq received-meta meta)))
+    (opencode-sse--dispatch "meta.default" nil)
+    (should (null received-meta))))
 
 (ert-deftest test-opencode-sse/unregister-handlers ()
   "Unregister removes all handlers for an event."
@@ -419,7 +439,7 @@
         (called nil))
     (opencode-sse-register-handler
      "remove.me"
-     (lambda (_event _data) (setq called t)))
+     (lambda (_event _data _meta) (setq called t)))
     (opencode-sse-unregister-handlers "remove.me")
     (opencode-sse--dispatch "remove.me" nil)
     (should (null called))))
@@ -428,7 +448,7 @@
   "Registering the same handler twice does not duplicate it."
   (let ((opencode-sse--handlers nil)
         (count 0))
-    (let ((handler (lambda (_event _data) (setq count (1+ count)))))
+    (let ((handler (lambda (_event _data _meta) (setq count (1+ count)))))
       (opencode-sse-register-handler "dup.test" handler)
       (opencode-sse-register-handler "dup.test" handler)
       (opencode-sse--dispatch "dup.test" nil)
@@ -441,7 +461,7 @@
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler "other.event" (lambda (_e _d)))
+    (opencode-sse-register-handler "other.event" (lambda (_e _d _m)))
     ;; Feed an event whose type is "no.handler" — no handler registered.
     (opencode-sse--process-chunk
      conn
@@ -454,7 +474,7 @@
   (let ((opencode-sse--handlers nil)
         (conn (opencode-connection-create)))
     (opencode-sse--initialize-state conn)
-    (opencode-sse-register-handler "bn.test" (lambda (_e _d)))
+    (opencode-sse-register-handler "bn.test" (lambda (_e _d _m)))
     ;; Chunk does not end with \n.
     (opencode-sse--process-chunk conn "data: {\"type\":\"bn.test\",\"x\":1}")
     (should-not (opencode-sse--read-state conn :trailing-nl))
@@ -470,13 +490,25 @@
     (opencode-sse--initialize-state conn)
     (opencode-sse-register-handler
      "msg.updated"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     (opencode-sse--process-chunk conn "data: {\"type\":\"msg.updated\",\"x\":")
     (should (opencode-sse--read-state conn :fragments))
     (opencode-sse--process-chunk conn "42}")
     (opencode-sse--process-chunk conn "\n\n")
     (should dispatched)
     (should (= (alist-get 'x dispatched) 42))))
+
+(ert-deftest test-opencode-sse/process-chunk-passes-connection-in-meta ()
+  "The curl path threads the originating connection into handler META."
+  (let ((opencode-sse--handlers nil)
+        (received-conn :unset)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-state conn)
+    (opencode-sse-register-handler
+     "conn.test"
+     (lambda (_event _data meta) (setq received-conn (plist-get meta :connection))))
+    (opencode-sse--process-chunk conn "data: {\"type\":\"conn.test\",\"x\":1}\n\n")
+    (should (eq received-conn conn))))
 
 ;;; Bridge backend
 
@@ -517,7 +549,7 @@
     (opencode-sse--initialize-bridge-state conn)
     (opencode-sse-register-handler
      "session.created"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     (opencode-sse--bridge-process-output
      conn
      "{\"type\":\"session.created\",\"properties\":{\"id\":1}}\n")
@@ -525,6 +557,20 @@
     (should (equal (alist-get 'type dispatched) "session.created"))
     ;; Line buffer should be empty after processing.
     (should (equal (plist-get (opencode-connection-sse-state conn) :line-buffer) ""))))
+
+(ert-deftest test-opencode-sse/bridge-process-passes-connection-in-meta ()
+  "The bridge path threads the originating connection into handler META."
+  (let ((opencode-sse--handlers nil)
+        (received-conn :unset)
+        (conn (opencode-connection-create)))
+    (opencode-sse--initialize-bridge-state conn)
+    (opencode-sse-register-handler
+     "conn.bridge"
+     (lambda (_event _data meta) (setq received-conn (plist-get meta :connection))))
+    (opencode-sse--bridge-process-output
+     conn
+     "{\"type\":\"conn.bridge\",\"properties\":{\"id\":1}}\n")
+    (should (eq received-conn conn))))
 
 (ert-deftest test-opencode-sse/bridge-process-split-across-calls ()
   "Data split across two process-output calls is assembled correctly."
@@ -534,7 +580,7 @@
     (opencode-sse--initialize-bridge-state conn)
     (opencode-sse-register-handler
      "msg.update"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     ;; First call: incomplete line (no newline).
     (opencode-sse--bridge-process-output
      conn "{\"type\":\"msg.up")
@@ -556,10 +602,10 @@
     (opencode-sse--initialize-bridge-state conn)
     (opencode-sse-register-handler
      "ev.one"
-     (lambda (_event data) (push (cons 'one data) results)))
+     (lambda (_event data _meta) (push (cons 'one data) results)))
     (opencode-sse-register-handler
      "ev.two"
-     (lambda (_event data) (push (cons 'two data) results)))
+     (lambda (_event data _meta) (push (cons 'two data) results)))
     (opencode-sse--bridge-process-output
      conn
      (concat "{\"type\":\"ev.one\",\"n\":1}\n"
@@ -577,7 +623,7 @@
     (opencode-sse--initialize-bridge-state conn)
     (opencode-sse-register-handler
      "ev.one"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     ;; Complete line followed by incomplete line.
     (opencode-sse--bridge-process-output
      conn
@@ -595,7 +641,7 @@
     (opencode-sse--initialize-bridge-state conn)
     (opencode-sse-register-handler
      "test.event"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     (opencode-sse--bridge-process-output
      conn
      "\n\n{\"type\":\"test.event\",\"x\":1}\n\n")
@@ -610,7 +656,7 @@
     (opencode-sse--initialize-bridge-state conn)
     (opencode-sse-register-handler
      "good.event"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     (opencode-sse--bridge-process-output
      conn
      "not valid json\n{\"type\":\"good.event\",\"x\":42}\n")
@@ -625,7 +671,7 @@
     (opencode-sse--initialize-bridge-state conn)
     (opencode-sse-register-handler
      "real.event"
-     (lambda (_event data) (setq dispatched data)))
+     (lambda (_event data _meta) (setq dispatched data)))
     (opencode-sse--bridge-process-output
      conn
      "{\"no_type\":\"here\"}\n{\"type\":\"real.event\",\"v\":1}\n")

@@ -61,7 +61,12 @@ Set to nil to disable truncation."
 (defmacro opencode-sse-define-handler (name event args &rest body)
   "Define and register an SSE handler for EVENT named NAME.
 
-ARGS and BODY are passed to `defun`. EVENT is the SSE event name string.
+ARGS and BODY are passed to `defun`.  EVENT is the SSE event name
+string.  Handlers are called with three arguments: the event name,
+the parsed DATA alist, and a META plist.  META currently carries
+`:connection' (the originating connection); future metadata can be
+added to the plist without changing the handler contract.
+
 Returns the created function symbol."
   (declare (indent defun))
   (let ((fn-name (intern (format "opencode-sse--%s-handler" name))))
@@ -75,7 +80,8 @@ Returns the created function symbol."
 (defun opencode-sse-register-handler (event handler)
   "Register HANDLER for SSE EVENT.
 
-EVENT is a string. HANDLER receives EVENT and DATA."
+EVENT is a string.  HANDLER receives EVENT, DATA, and a META plist.
+META currently carries `:connection' (the originating connection)."
   (opencode-sse--add-handler event handler))
 
 (defun opencode-sse-unregister-handlers (event)
@@ -83,11 +89,15 @@ EVENT is a string. HANDLER receives EVENT and DATA."
   (setq opencode-sse--handlers
         (assoc-delete-all event opencode-sse--handlers)))
 
-(defun opencode-sse--dispatch (event data)
-  "Dispatch EVENT and DATA to registered handlers."
+(defun opencode-sse--dispatch (event data &optional meta)
+  "Dispatch EVENT, DATA, and META to registered handlers.
+
+META is a plist of event metadata.  It carries `:connection', the
+connection on which the event arrived, so handlers can route
+responses back to the correct OpenCode server."
   (let ((handlers (alist-get event opencode-sse--handlers nil nil #'string=)))
     (dolist (handler handlers)
-      (funcall handler event data))))
+      (funcall handler event data meta))))
 
 (defun opencode-sse--decode-data (data)
   "Decode DATA from JSON.
@@ -202,12 +212,12 @@ Resets CONNECTION SSE state afterward."
                    (payload (opencode-sse--decode-data data))
                    (parse-ms (opencode-sse-profile--elapsed-ms parse-start))
                    (dispatch-start (opencode-sse-profile--now)))
-              (opencode-sse--dispatch event payload)
+              (opencode-sse--dispatch event payload (list :connection connection))
               (let ((dispatch-ms (opencode-sse-profile--elapsed-ms dispatch-start)))
                 (opencode-sse-profile--record-finalize
                  event parse-ms dispatch-ms data-bytes)))
           (let ((payload (opencode-sse--decode-data data)))
-            (opencode-sse--dispatch event payload)))))))
+            (opencode-sse--dispatch event payload (list :connection connection))))))))
 
 (defun opencode-sse--process-chunk (connection chunk)
   "Process SSE CHUNK for CONNECTION.
@@ -421,13 +431,13 @@ JSON lines to handlers."
                   (let* ((event (alist-get 'type parsed))
                          (dispatch-start (opencode-sse-profile--now)))
                     (when event
-                      (opencode-sse--dispatch event parsed)
+                      (opencode-sse--dispatch event parsed (list :connection connection))
                       (let ((dispatch-ms (opencode-sse-profile--elapsed-ms dispatch-start)))
                         (opencode-sse-profile--record-finalize
                          event parse-ms dispatch-ms (string-bytes line)))))))
             (when-let ((parsed (opencode-sse--bridge-parse-line line)))
               (when-let ((event (alist-get 'type parsed)))
-                (opencode-sse--dispatch event parsed))))
+                (opencode-sse--dispatch event parsed (list :connection connection)))))
           (when chunk-start
             (opencode-sse-profile--record-chunk
              (opencode-sse-profile--elapsed-ms chunk-start)

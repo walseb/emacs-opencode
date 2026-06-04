@@ -89,6 +89,63 @@
     (puthash "s1" (current-buffer) opencode-session--buffers)
     (should (eq (opencode-session--buffer-for-session "s1") (current-buffer)))))
 
+;;; any-live-session-buffer
+
+(ert-deftest test-opencode-session-vars/any-live-buffer-no-connection ()
+  "With no connection filter, return any live registered buffer."
+  (let ((opencode-session--buffers (make-hash-table :test 'equal))
+        (buf (generate-new-buffer " *oc-test-any*")))
+    (unwind-protect
+        (progn
+          (puthash "s1" buf opencode-session--buffers)
+          (should (eq (opencode-session--any-live-session-buffer) buf)))
+      (kill-buffer buf))))
+
+(ert-deftest test-opencode-session-vars/any-live-buffer-skips-dead ()
+  "Dead buffers are skipped."
+  (let ((opencode-session--buffers (make-hash-table :test 'equal))
+        (dead (generate-new-buffer " *oc-test-dead*"))
+        (live (generate-new-buffer " *oc-test-live*")))
+    (unwind-protect
+        (progn
+          (puthash "dead" dead opencode-session--buffers)
+          (puthash "live" live opencode-session--buffers)
+          (kill-buffer dead)
+          (should (eq (opencode-session--any-live-session-buffer) live)))
+      (when (buffer-live-p live) (kill-buffer live)))))
+
+(ert-deftest test-opencode-session-vars/any-live-buffer-matches-connection ()
+  "With a connection filter, only return a buffer on that connection."
+  (let ((opencode-session--buffers (make-hash-table :test 'equal))
+        (conn-a 'conn-a)
+        (conn-b 'conn-b)
+        (buf-a (generate-new-buffer " *oc-test-a*"))
+        (buf-b (generate-new-buffer " *oc-test-b*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf-a
+            (setq-local opencode-session--connection conn-a))
+          (with-current-buffer buf-b
+            (setq-local opencode-session--connection conn-b))
+          (puthash "a" buf-a opencode-session--buffers)
+          (puthash "b" buf-b opencode-session--buffers)
+          (should (eq (opencode-session--any-live-session-buffer conn-a) buf-a))
+          (should (eq (opencode-session--any-live-session-buffer conn-b) buf-b)))
+      (kill-buffer buf-a)
+      (kill-buffer buf-b))))
+
+(ert-deftest test-opencode-session-vars/any-live-buffer-no-connection-match ()
+  "Return nil when no buffer matches the requested connection."
+  (let ((opencode-session--buffers (make-hash-table :test 'equal))
+        (buf (generate-new-buffer " *oc-test-nomatch*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local opencode-session--connection 'conn-a))
+          (puthash "a" buf opencode-session--buffers)
+          (should (null (opencode-session--any-live-session-buffer 'conn-other))))
+      (kill-buffer buf))))
+
 (provide 'emacs-opencode-session-vars-test)
 
 ;;; emacs-opencode-session-vars-test.el ends here

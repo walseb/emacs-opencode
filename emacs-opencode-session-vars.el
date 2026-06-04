@@ -54,15 +54,23 @@ re-collapse the corresponding block.")
   "Return the session buffer for SESSION-ID, if any."
   (gethash session-id opencode-session--buffers))
 
-(defun opencode-session--any-live-session-buffer ()
+(defun opencode-session--any-live-session-buffer (&optional connection)
   "Return any live buffer from `opencode-session--buffers'.
 This is used as a fallback when a session ID (e.g. from a subagent)
-has no registered buffer.  Any buffer with a live connection to the
-same OpenCode instance can handle the request."
+has no registered buffer.
+
+When CONNECTION is non-nil, only return a buffer whose
+`opencode-session--connection' matches CONNECTION.  This is
+essential when multiple OpenCode servers are running: a response
+must be routed back to the server that originated the request, not
+to an arbitrary buffer that may belong to a different server."
   (let (result)
     (maphash (lambda (_id buf)
                (when (and (not result) (buffer-live-p buf))
-                 (setq result buf)))
+                 (when (or (null connection)
+                           (with-current-buffer buf
+                             (eq opencode-session--connection connection)))
+                   (setq result buf))))
              opencode-session--buffers)
     result))
 
