@@ -1,7 +1,126 @@
 ;;; emacs-opencode-client-test.el --- Tests for HTTP client  -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'cl-lib)
 (require 'emacs-opencode-client)
+
+(defmacro opencode-client-test--with-captured-request (url-var args-var &rest body)
+  "Run BODY with `request' stubbed to capture its arguments.
+URL-VAR and ARGS-VAR are bound to the URL and keyword arguments of the
+last `request' call made during BODY."
+  (declare (indent 2))
+  `(let ((,url-var nil)
+         (,args-var nil))
+     (cl-letf (((symbol-function 'request)
+                (lambda (&rest request-args)
+                  (setq ,url-var (car request-args)
+                        ,args-var (cdr request-args))
+                  nil)))
+       ,@body)))
+
+(defun opencode-client-test--connection (&optional directory)
+  "Return a connection for DIRECTORY pointed at a fake base URL."
+  (opencode-connection-create
+   :base-url "http://127.0.0.1:4096"
+   :hostname "127.0.0.1"
+   :port 4096
+   :directory directory
+   :timeout 10))
+
+;;; directory header
+
+(ert-deftest test-opencode-client/request-sends-directory-header ()
+  "Every request includes an url-encoded x-opencode-directory header."
+  (let ((conn (opencode-client-test--connection "/tmp/project/")))
+    (opencode-client-test--with-captured-request url args
+      (opencode-request conn 'GET "/agent")
+      (should (equal url "http://127.0.0.1:4096/agent"))
+      (let ((headers (plist-get args :headers)))
+        (should (equal (cdr (assoc "x-opencode-directory" headers))
+                       (url-hexify-string "/tmp/project")))))))
+
+(ert-deftest test-opencode-client/request-directory-header-strips-trailing-slash ()
+  "Directory header value has no trailing slash."
+  (let ((conn (opencode-client-test--connection "/tmp/project/")))
+    (opencode-client-test--with-captured-request _url args
+      (opencode-request conn 'GET "/agent")
+      (let* ((headers (plist-get args :headers))
+             (value (cdr (assoc "x-opencode-directory" headers))))
+        (should-not (string-suffix-p "%2F" value))
+        (should-not (string-suffix-p "/" value))))))
+
+(ert-deftest test-opencode-client/request-no-directory-header-without-directory ()
+  "No directory header when the connection has no directory."
+  (let ((conn (opencode-client-test--connection nil)))
+    (opencode-client-test--with-captured-request _url args
+      (opencode-request conn 'GET "/agent")
+      (should-not (assoc "x-opencode-directory" (plist-get args :headers))))))
+
+(ert-deftest test-opencode-client/request-directory-header-with-json ()
+  "Directory header coexists with the JSON content type header."
+  (let ((conn (opencode-client-test--connection "/tmp/project/")))
+    (opencode-client-test--with-captured-request _url args
+      (opencode-request conn 'POST "/session/s1/abort" :json '((a . 1)))
+      (let ((headers (plist-get args :headers)))
+        (should (assoc "x-opencode-directory" headers))
+        (should (equal (cdr (assoc "Content-Type" headers))
+                       "application/json"))))))
+
+(ert-deftest test-opencode-client/request-respects-caller-directory-header ()
+  "An explicit x-opencode-directory header is not overridden."
+  (let ((conn (opencode-client-test--connection "/tmp/project/")))
+    (opencode-client-test--with-captured-request _url args
+      (opencode-request conn 'GET "/agent"
+                        :headers '(("x-opencode-directory" . "custom")))
+      (let ((headers (plist-get args :headers)))
+        (should (equal (cdr (assoc "x-opencode-directory" headers)) "custom"))
+        (should (= 1 (cl-count "x-opencode-directory" headers
+                               :key #'car :test #'equal)))))))
+
+;;; session-create
+
+(ert-deftest test-opencode-client/session-create-sends-no-body ()
+  "Session creation posts /session with no request body."
+  (let ((conn (opencode-client-test--connection "/tmp/project/")))
+    (opencode-client-test--with-captured-request url args
+      (opencode-client-session-create conn :success #'ignore :error #'ignore)
+      (should (equal url "http://127.0.0.1:4096/session"))
+      (should (equal (plist-get args :type) "POST"))
+      (should (null (plist-get args :data))))))
+
+;;; format-error
+
+(ert-deftest test-opencode-client/format-error-status-and-tag ()
+  "Format status code and server error tag."
+  (let ((response (make-request-response :status-code 400)))
+    (should (equal (opencode-client-format-error
+                    (list :response response :data '((_tag . "BadRequest"))))
+                   "HTTP 400: BadRequest"))))
+
+(ert-deftest test-opencode-client/format-error-prefers-message-field ()
+  "Prefer a server-provided message over the error tag."
+  (let ((response (make-request-response :status-code 400)))
+    (should (equal (opencode-client-format-error
+                    (list :response response
+                          :data '((_tag . "BadRequest")
+                                  (message . "directory is invalid"))))
+                   "HTTP 400: directory is invalid"))))
+
+(ert-deftest test-opencode-client/format-error-status-only ()
+  "Fall back to the status code alone."
+  (let ((response (make-request-response :status-code 500)))
+    (should (equal (opencode-client-format-error (list :response response))
+                   "HTTP 500"))))
+
+(ert-deftest test-opencode-client/format-error-error-thrown ()
+  "Fall back to the thrown error when there is no response."
+  (should (equal (opencode-client-format-error
+                  (list :error-thrown '(error . "connection refused")))
+                 "(error . connection refused)")))
+
+(ert-deftest test-opencode-client/format-error-nil-without-detail ()
+  "Return nil when no detail is available."
+  (should (null (opencode-client-format-error nil))))
 
 ;;; vectorize-answers
 

@@ -286,17 +286,16 @@ once the server is ready."
     (opencode-run-server
      normalized
      (lambda (connection)
-       (opencode-request
+       (opencode-client-session-create
         connection
-        'POST
-        "/session"
-        :data `(("directory" . ,normalized))
         :success (lambda (&rest args)
                    (let* ((data (plist-get args :data))
                           (session (opencode--session-from-data data)))
                      (opencode-session-open session connection)))
-        :error (lambda (&rest _args)
-                 (error "Failed to create OpenCode session")))))))
+        :error (lambda (&rest args)
+                 (let ((detail (opencode-client-format-error args)))
+                   (error "Failed to create OpenCode session%s"
+                          (if detail (format " (%s)" detail) "")))))))))
 
 ;;;###autoload
 (defun opencode-ask (directory prompt)
@@ -309,11 +308,8 @@ once the server is ready."
     (opencode-run-server
      normalized
      (lambda (connection)
-       (opencode-request
+       (opencode-client-session-create
         connection
-        'POST
-        "/session"
-        :data `(("directory" . ,normalized))
         :success (lambda (&rest args)
                    (let* ((data (plist-get args :data))
                           (session (opencode--session-from-data data)))
@@ -324,8 +320,10 @@ once the server is ready."
                         (with-current-buffer buffer
                           (opencode-session-insert-input prompt)
                           (opencode-session-send-input))))))
-        :error (lambda (&rest _args)
-                 (error "Failed to create OpenCode session")))))))
+        :error (lambda (&rest args)
+                 (let ((detail (opencode-client-format-error args)))
+                   (error "Failed to create OpenCode session%s"
+                          (if detail (format " (%s)" detail) "")))))))))
 
 (defun opencode--contextual-snippet ()
   "Return contextual buffer text and metadata.

@@ -4,10 +4,40 @@
 (require 'json)
 (require 'request)
 (require 'subr-x)
+(require 'url-util)
 (require 'emacs-opencode-connection)
 (require 'emacs-opencode-sse)
 
 (declare-function opencode--json-read "emacs-opencode-sse")
+
+(defun opencode-client--directory-header (conn headers)
+  "Return a directory routing header alist for CONN.
+
+Returns nil when CONN has no directory or HEADERS already contains an
+x-opencode-directory entry.  The header value is the connection directory
+without its trailing slash, url-encoded to match the OpenCode SDK."
+  (when-let ((directory (opencode-connection-directory conn)))
+    (unless (assoc "x-opencode-directory" headers)
+      `(("x-opencode-directory"
+         . ,(url-hexify-string (directory-file-name directory)))))))
+
+(defun opencode-client-format-error (args)
+  "Return a short description of a failed request from ARGS.
+
+ARGS is the keyword plist passed to `request' error callbacks.  Returns a
+string like \"HTTP 400: BadRequest\", or nil when no detail is available."
+  (let* ((response (plist-get args :response))
+         (status (and response (request-response-status-code response)))
+         (data (plist-get args :data))
+         (detail (and (listp data)
+                      (or (alist-get 'message data)
+                          (alist-get '_tag data))))
+         (error-thrown (plist-get args :error-thrown)))
+    (cond
+     ((and status detail) (format "HTTP %s: %s" status detail))
+     (status (format "HTTP %s" status))
+     (detail (format "%s" detail))
+     (error-thrown (format "%s" error-thrown)))))
 
 (cl-defmethod opencode-request ((conn opencode-connection) method path &rest args &key data json parser headers timeout &allow-other-keys)
   "Send a raw HTTP request using CONN.
@@ -16,16 +46,19 @@ METHOD is a HTTP verb symbol like `GET` or `POST`. PATH is appended to the
 connection base URL. DATA is passed through to `request`. When JSON is
 provided, it is encoded and sent with a JSON content type. PARSER defaults to
 `json-read` when omitted. HEADERS is an alist of HTTP headers. Any remaining
-ARGS are forwarded to `request`."
+ARGS are forwarded to `request`.  Every request carries an
+x-opencode-directory header derived from the connection directory so the
+server routes session-less requests to the right workspace."
   (let* ((base-url (opencode-connection-base-url conn))
          (url (concat (string-remove-suffix "/" base-url) path))
          (auth (when (opencode-connection-password conn)
                  (list (or (opencode-connection-username conn) "opencode")
                        (opencode-connection-password conn))))
          (payload (when json (json-encode json)))
-         (merged-headers (if json
-                             (append headers '(("Content-Type" . "application/json")))
-                           headers))
+         (merged-headers (append (opencode-client--directory-header conn headers)
+                                 headers
+                                 (when json
+                                   '(("Content-Type" . "application/json")))))
          (timeout-value (if (plist-member args :timeout)
                             timeout
                           (or (opencode-connection-timeout conn) 10))))
@@ -46,6 +79,18 @@ ARGS are forwarded to `request`."
    conn
    'GET
    "/global/health"
+   :success success
+   :error error))
+
+(cl-defmethod opencode-client-session-create ((conn opencode-connection) &key success error)
+  "Create a new session in CONN's directory.
+
+The request body is empty; the server resolves the target directory
+from the x-opencode-directory header sent with every request."
+  (opencode-request
+   conn
+   'POST
+   "/session"
    :success success
    :error error))
 
