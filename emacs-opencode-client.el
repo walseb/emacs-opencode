@@ -104,7 +104,7 @@ required to retrieve more."
    conn
    'GET
    "/session"
-   :data (when limit `(("limit" . ,limit)))
+   :params (when limit `(("limit" . ,limit)))
    :success success
    :error error))
 
@@ -116,7 +116,7 @@ LIMIT restricts the number of returned messages when provided."
    conn
    'GET
    (format "/session/%s/message" session-id)
-   :data (when limit `(("limit" . ,limit)))
+   :params (when limit `(("limit" . ,limit)))
    :success success
    :error error))
 

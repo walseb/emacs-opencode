@@ -90,22 +90,46 @@ last `request' call made during BODY."
 
 ;;; sessions
 
-(ert-deftest test-opencode-client/sessions-no-limit-omits-data ()
-  "Listing sessions without a limit sends no query data."
+(ert-deftest test-opencode-client/sessions-no-limit-omits-params ()
+  "Listing sessions without a limit sends no query params."
   (let ((conn (opencode-client-test--connection "/tmp/project/")))
     (opencode-client-test--with-captured-request url args
       (opencode-client-sessions conn :success #'ignore :error #'ignore)
       (should (equal url "http://127.0.0.1:4096/session"))
       (should (equal (plist-get args :type) "GET"))
+      (should (null (plist-get args :params)))
       (should (null (plist-get args :data))))))
 
 (ert-deftest test-opencode-client/sessions-forwards-limit ()
-  "A limit is forwarded as a limit query parameter."
+  "A limit is forwarded as a limit query parameter, not a request body."
   (let ((conn (opencode-client-test--connection "/tmp/project/")))
     (opencode-client-test--with-captured-request _url args
       (opencode-client-sessions conn :limit 1000
                                 :success #'ignore :error #'ignore)
-      (should (equal (plist-get args :data) '(("limit" . 1000)))))))
+      (should (equal (plist-get args :params) '(("limit" . 1000))))
+      (should (null (plist-get args :data))))))
+
+;;; session-messages
+
+(ert-deftest test-opencode-client/session-messages-no-limit-omits-params ()
+  "Fetching messages without a limit sends no query params."
+  (let ((conn (opencode-client-test--connection "/tmp/project/")))
+    (opencode-client-test--with-captured-request url args
+      (opencode-client-session-messages conn "ses_1"
+                                         :success #'ignore :error #'ignore)
+      (should (equal url "http://127.0.0.1:4096/session/ses_1/message"))
+      (should (equal (plist-get args :type) "GET"))
+      (should (null (plist-get args :params)))
+      (should (null (plist-get args :data))))))
+
+(ert-deftest test-opencode-client/session-messages-forwards-limit ()
+  "A limit is forwarded as a limit query parameter, not a request body."
+  (let ((conn (opencode-client-test--connection "/tmp/project/")))
+    (opencode-client-test--with-captured-request _url args
+      (opencode-client-session-messages conn "ses_1" :limit 5
+                                         :success #'ignore :error #'ignore)
+      (should (equal (plist-get args :params) '(("limit" . 5))))
+      (should (null (plist-get args :data))))))
 
 ;;; format-error
 
