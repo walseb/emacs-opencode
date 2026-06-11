@@ -18,6 +18,14 @@
   :type 'number
   :group 'emacs-opencode)
 
+(defcustom opencode-session-list-limit 1000
+  "Maximum number of sessions to request when listing sessions.
+The OpenCode server caps `GET /session' at 100 sessions by default;
+this option raises that limit for the session-selection completion
+table.  A value of nil uses the server default."
+  :type '(choice (const :tag "Server default" nil) integer)
+  :group 'emacs-opencode)
+
 
 (defvar opencode--connections (make-hash-table :test 'equal)
   "Registry mapping directories to OpenCode connections.")
@@ -153,6 +161,7 @@ When INCLUDE-IDENTIFIERS is non-nil, include slug and ID."
 Call ON-SELECTED with the selected session and session info data."
   (opencode-client-sessions
    connection
+   :limit opencode-session-list-limit
    :success (lambda (&rest args)
               (let* ((data (plist-get args :data))
                      (items (opencode--session-items data))

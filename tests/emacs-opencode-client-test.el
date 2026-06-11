@@ -88,6 +88,25 @@ last `request' call made during BODY."
       (should (equal (plist-get args :type) "POST"))
       (should (null (plist-get args :data))))))
 
+;;; sessions
+
+(ert-deftest test-opencode-client/sessions-no-limit-omits-data ()
+  "Listing sessions without a limit sends no query data."
+  (let ((conn (opencode-client-test--connection "/tmp/project/")))
+    (opencode-client-test--with-captured-request url args
+      (opencode-client-sessions conn :success #'ignore :error #'ignore)
+      (should (equal url "http://127.0.0.1:4096/session"))
+      (should (equal (plist-get args :type) "GET"))
+      (should (null (plist-get args :data))))))
+
+(ert-deftest test-opencode-client/sessions-forwards-limit ()
+  "A limit is forwarded as a limit query parameter."
+  (let ((conn (opencode-client-test--connection "/tmp/project/")))
+    (opencode-client-test--with-captured-request _url args
+      (opencode-client-sessions conn :limit 1000
+                                :success #'ignore :error #'ignore)
+      (should (equal (plist-get args :data) '(("limit" . 1000)))))))
+
 ;;; format-error
 
 (ert-deftest test-opencode-client/format-error-status-and-tag ()
