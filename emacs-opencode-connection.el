@@ -214,15 +214,15 @@ updated CONNECTION."
 
 (defun opencode-connection-alive-p (connection)
   "Return non-nil if CONNECTION's server process is alive."
-  (when-let ((process (opencode-connection-process connection)))
+  (when-let* ((process (opencode-connection-process connection)))
     (process-live-p process)))
 
 (defun opencode-connection-stop (connection)
   "Stop the OpenCode server associated with CONNECTION."
-  (when-let ((process (opencode-connection-process connection)))
+  (when-let* ((process (opencode-connection-process connection)))
     (when (process-live-p process)
       (delete-process process))
-    (when-let ((buffer (process-buffer process)))
+    (when-let* ((buffer (process-buffer process)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))
     (setf (opencode-connection-process connection) nil)))

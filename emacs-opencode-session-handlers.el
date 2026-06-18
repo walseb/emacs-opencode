@@ -24,7 +24,7 @@
   "Handle the session.created SSE DATA."
   (let* ((info (alist-get 'info (alist-get 'properties data)))
          (session-id (alist-get 'id info)))
-    (when-let ((buffer (opencode-session--buffer-for-session session-id)))
+    (when-let* ((buffer (opencode-session--buffer-for-session session-id)))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (opencode-session--update-session info))))))
@@ -33,7 +33,7 @@
   "Handle the session.updated SSE DATA."
   (let* ((info (alist-get 'info (alist-get 'properties data)))
          (session-id (alist-get 'id info)))
-    (when-let ((buffer (opencode-session--buffer-for-session session-id)))
+    (when-let* ((buffer (opencode-session--buffer-for-session session-id)))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (opencode-session--update-session info))))))
@@ -90,7 +90,7 @@ STATUS-INFO is the `status' field of a session.status SSE payload."
                  (string= error-name "MessageAbortedError"))
       (message "OpenCode: %s" (opencode-session--session-error-text error-info))
       (when session-id
-        (when-let ((buffer (opencode-session--buffer-for-session session-id)))
+        (when-let* ((buffer (opencode-session--buffer-for-session session-id)))
           (when (buffer-live-p buffer)
             (with-current-buffer buffer
               (opencode-session--render-header))))))))
@@ -101,7 +101,7 @@ STATUS-INFO is the `status' field of a session.status SSE payload."
   "Handle the message.updated SSE DATA."
   (let* ((info (alist-get 'info (alist-get 'properties data)))
          (session-id (alist-get 'sessionID info)))
-    (when-let ((buffer (opencode-session--buffer-for-session session-id)))
+    (when-let* ((buffer (opencode-session--buffer-for-session session-id)))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (opencode-session--upsert-message info))))))
@@ -115,7 +115,7 @@ tracking and re-render the parent task tool part."
          (part (alist-get 'part properties))
          (session-id (alist-get 'sessionID part))
          (delta (alist-get 'delta properties)))
-    (if-let ((buffer (opencode-session--buffer-for-session session-id)))
+    (if-let* ((buffer (opencode-session--buffer-for-session session-id)))
         ;; Normal case: session has a buffer
         (when (buffer-live-p buffer)
           (with-current-buffer buffer
@@ -136,10 +136,10 @@ tracking and re-render the parent task tool part."
          (delta (alist-get 'delta properties)))
     (when (and (string= field "text")
                (stringp delta))
-      (when-let ((buffer (opencode-session--buffer-for-session session-id)))
+      (when-let* ((buffer (opencode-session--buffer-for-session session-id)))
         (when (buffer-live-p buffer)
           (with-current-buffer buffer
-            (when-let ((message (opencode-session--find-message message-id)))
+            (when-let* ((message (opencode-session--find-message message-id)))
               (when-let* ((entry (assoc part-id (opencode-message-parts message)))
                           (part (cdr entry))
                           ((opencode-message-part-p part)))
@@ -171,7 +171,7 @@ tracking and re-render the parent task tool part."
   "Re-render the task tool part identified by PARENT-INFO.
 PARENT-INFO is a cons (PARENT-SESSION-ID . TASK-PART-ID)."
   (let ((task-part-id (cdr parent-info)))
-    (when-let ((message (opencode-session--find-message-by-part task-part-id)))
+    (when-let* ((message (opencode-session--find-message-by-part task-part-id)))
       (opencode-session--render-message message))))
 
 (defun opencode-session--find-message-by-part (part-id)
@@ -221,7 +221,7 @@ PARENT-SESSION-ID is the session that owns the task tool part."
      ((and (string= kind "list") (alist-get 'path metadata))
       (format "list %s" (alist-get 'path metadata)))
      ((and (string= kind "bash") (alist-get 'command metadata))
-      (if-let ((description (alist-get 'description metadata)))
+      (if-let* ((description (alist-get 'description metadata)))
           (format "%s (%s)" description (alist-get 'command metadata))
         (format "%s" (alist-get 'command metadata))))
      ((and (string= kind "task") (alist-get 'subagent_type metadata))
@@ -423,7 +423,7 @@ not block the process filter."
     (maphash (lambda (_session-id buffer)
                (when (buffer-live-p buffer)
                  (with-current-buffer buffer
-                   (when-let ((connection opencode-session--connection)
+                   (when-let* ((connection opencode-session--connection)
                               (directory (opencode-connection-directory connection)))
                      (push directory directories)))))
              opencode-session--buffers)
@@ -477,7 +477,7 @@ Returns nil when PATH is not a string."
       (dolist (buffer (buffer-list))
         (when (buffer-live-p buffer)
           (with-current-buffer buffer
-            (when-let ((buffer-path (buffer-file-name buffer)))
+            (when-let* ((buffer-path (buffer-file-name buffer)))
               (let ((normalized-buffer (opencode-session--normalize-file-path buffer-path)))
                 (when (and normalized-buffer
                            (string= normalized normalized-buffer))

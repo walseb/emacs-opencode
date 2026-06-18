@@ -224,7 +224,7 @@ Most recently used first."
 
 (defun opencode-session--header-context-string ()
   "Return the context usage string for the session header."
-  (when-let ((info (opencode-session--last-assistant-info)))
+  (when-let* ((info (opencode-session--last-assistant-info)))
     (let* ((tokens (alist-get 'tokens info))
            (total (opencode-session--tokens-total tokens)))
       (when (numberp total)

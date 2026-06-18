@@ -16,7 +16,7 @@
 Returns nil when CONN has no directory or HEADERS already contains an
 x-opencode-directory entry.  The header value is the connection directory
 without its trailing slash, url-encoded to match the OpenCode SDK."
-  (when-let ((directory (opencode-connection-directory conn)))
+  (when-let* ((directory (opencode-connection-directory conn)))
     (unless (assoc "x-opencode-directory" headers)
       `(("x-opencode-directory"
          . ,(url-hexify-string (directory-file-name directory)))))))

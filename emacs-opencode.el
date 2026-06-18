@@ -145,7 +145,7 @@ When INCLUDE-IDENTIFIERS is non-nil, include slug and ID."
         (when session-id
           (puthash session-id item items-by-id))))
     (dolist (session-id ordered-ids)
-      (when-let ((item (gethash session-id items-by-id)))
+      (when-let* ((item (gethash session-id items-by-id)))
         (puthash session-id t seen)
         (push item ordered-items)))
     (setq ordered-items (nreverse ordered-items))
@@ -191,7 +191,7 @@ When ON-READY is non-nil, call it with the session buffer once ready."
         (progn
           (with-current-buffer existing-buffer
             (setq-local opencode-session--connection connection)
-            (when-let ((info (opencode-session-info session)))
+            (when-let* ((info (opencode-session-info session)))
               (opencode-session--update-session info))
             (opencode-session--ensure-agents connection))
           (pop-to-buffer existing-buffer)
@@ -201,7 +201,7 @@ When ON-READY is non-nil, call it with the session buffer once ready."
 
 (defun opencode--project-directory ()
   "Return the current project root directory, if any."
-  (when-let ((project (project-current)))
+  (when-let* ((project (project-current)))
     (project-root project)))
 
 (defun opencode--read-directory (prompt)

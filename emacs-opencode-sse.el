@@ -123,7 +123,7 @@ Signals an error when DATA is not valid JSON."
 
 (defun opencode-sse--auth-header (connection)
   "Return an Authorization header for CONNECTION when needed."
-  (when-let ((password (opencode-connection-password connection)))
+  (when-let* ((password (opencode-connection-password connection)))
     (let ((user (or (opencode-connection-username connection) "opencode")))
       (format "Authorization: Basic %s"
               (base64-encode-string (format "%s:%s" user password) t)))))
@@ -261,7 +261,7 @@ is 1 (skip the \\n that completes the boundary)."
       (cons 0 1))
      ;; Boundary within this chunk.
      (t
-      (when-let ((pos (string-search "\n\n" chunk)))
+      (when-let* ((pos (string-search "\n\n" chunk)))
         (cons pos (+ pos 2)))))))
 
 (defun opencode-sse--process-chunk-1 (connection chunk)
@@ -364,7 +364,7 @@ Respects `opencode-sse-backend' and falls back based on availability."
 
 (defun opencode-sse--bridge-auth-token (connection)
   "Return the Base64 auth token for CONNECTION, or nil."
-  (when-let ((password (opencode-connection-password connection)))
+  (when-let* ((password (opencode-connection-password connection)))
     (let ((user (or (opencode-connection-username connection) "opencode")))
       (base64-encode-string (format "%s:%s" user password) t))))
 
@@ -435,8 +435,8 @@ JSON lines to handlers."
                       (let ((dispatch-ms (opencode-sse-profile--elapsed-ms dispatch-start)))
                         (opencode-sse-profile--record-finalize
                          event parse-ms dispatch-ms (string-bytes line)))))))
-            (when-let ((parsed (opencode-sse--bridge-parse-line line)))
-              (when-let ((event (alist-get 'type parsed)))
+            (when-let* ((parsed (opencode-sse--bridge-parse-line line)))
+              (when-let* ((event (alist-get 'type parsed)))
                 (opencode-sse--dispatch event parsed (list :connection connection)))))
           (when chunk-start
             (opencode-sse-profile--record-chunk
@@ -532,7 +532,7 @@ Returns the curl process."
                    :noquery t
                    :filter (lambda (proc output)
                               (when opencode-sse-log-output
-                                (when-let ((buffer (process-buffer proc)))
+                                (when-let* ((buffer (process-buffer proc)))
                                   (when (buffer-live-p buffer)
                                     (with-current-buffer buffer
                                       (let ((inhibit-read-only t)
@@ -586,18 +586,18 @@ Returns the streaming process."
 
 (defun opencode-sse-close (connection)
   "Stop the SSE stream for CONNECTION."
-  (when-let ((process (opencode-connection-sse-process connection)))
+  (when-let* ((process (opencode-connection-sse-process connection)))
     (when (process-live-p process)
       (delete-process process))
-    (when-let ((buffer (process-buffer process)))
+    (when-let* ((buffer (process-buffer process)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))
     (setf (opencode-connection-sse-process connection) nil))
   ;; Clean up stderr pipe process (bridge mode).
-  (when-let ((stderr (opencode-connection-sse-stderr-process connection)))
+  (when-let* ((stderr (opencode-connection-sse-stderr-process connection)))
     (when (process-live-p stderr)
       (delete-process stderr))
-    (when-let ((buffer (process-buffer stderr)))
+    (when-let* ((buffer (process-buffer stderr)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))
     (setf (opencode-connection-sse-stderr-process connection) nil))

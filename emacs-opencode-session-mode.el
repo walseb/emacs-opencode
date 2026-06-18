@@ -506,7 +506,7 @@ Falls back to a normal prompt when INPUT does not match an available command."
 
 (defun opencode-session--register-buffer (session buffer)
   "Register BUFFER for SESSION."
-  (when-let ((session-id (opencode-session-id session)))
+  (when-let* ((session-id (opencode-session-id session)))
     (puthash session-id buffer opencode-session--buffers)
     (opencode-session--maybe-start-spinner)))
 
@@ -682,7 +682,7 @@ PREVIOUS-NAME is the previous buffer name to compare against."
   "Update STATUS for SESSION-ID.
 
 STATUS is an `opencode-status' struct."
-  (when-let ((buffer (opencode-session--buffer-for-session session-id)))
+  (when-let* ((buffer (opencode-session--buffer-for-session session-id)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (when opencode-session--session
@@ -761,7 +761,7 @@ Returns a cons cell (START . END) or nil when the input is not a slash command."
 
 (defun opencode-session--complete-command ()
   "Return completion data for leading slash commands."
-  (when-let ((bounds (opencode-session--command-completion-bounds)))
+  (when-let* ((bounds (opencode-session--command-completion-bounds)))
     (let* ((start (car bounds))
            (end (cdr bounds))
            (connection opencode-session--connection))
@@ -837,7 +837,7 @@ preceded by whitespace or the start of the input region."
 
 (defun opencode-session--complete-agent ()
   "Return completion data for @-agent mentions."
-  (when-let ((bounds (opencode-session--agent-completion-bounds)))
+  (when-let* ((bounds (opencode-session--agent-completion-bounds)))
     (let* ((start (car bounds))
            (end (cdr bounds))
            (connection opencode-session--connection))
