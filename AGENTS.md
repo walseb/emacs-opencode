@@ -9,6 +9,7 @@ and consistent with existing code.
   endpoint interfaces or TUI behavior.
 - OpenCode docs: https://opencode.ai/docs
 - `ARCHITECTURE.org` describes the high-level design; `TODO.org` tracks the roadmap.
+- The project readme file is `README.org`
 
 ## Build, Lint, Test
 
