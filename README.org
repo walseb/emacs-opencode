@@ -7,6 +7,9 @@ responses, and manage agents — all from native Emacs buffers.
 not yet have full feature parity with the OpenCode TUI. See [[file:TODO.org][TODO.org]] for a
 rough roadmap.
 
+* Demo
+https://github.com/user-attachments/assets/5882e485-cec4-40f0-ab4f-d668533f2b33
+
 * Quickstart
 
 Requirements:
