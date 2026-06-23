@@ -1,95 +1,127 @@
 #+TITLE: Emacs OpenCode Architecture
 
 * Overview
-This project is an Emacs-native client for OpenCode. It is designed to make the
-OpenCode workflow feel like a first-class Emacs experience: start or attach to a
-server, open a session, and work in a dedicated buffer where prompts, responses,
-and tool interactions are surfaced as a conversational log. The server remains
-the source of truth; the Emacs side focuses on orchestration, UI, and a small
-amount of local state needed for a smooth editing experience.
+This package is an Emacs-native client for OpenCode. It starts or attaches to an
+OpenCode server for a project, opens sessions in dedicated Emacs buffers, sends
+prompts and commands over HTTP, and reflects server events back into the buffer
+as a streaming conversation log.
+
+OpenCode remains the authority for sessions, messages, tools, providers, and
+agent behavior. The Emacs side is a thin orchestration and presentation layer:
+it owns process lifecycle, request dispatch, event routing, rendering, and the
+small amount of local state needed for an interactive editor UI.
 
 * Core Principles
 - Emacs-first UX: native buffers, commands, and keybindings.
 - Server-first data: OpenCode remains authoritative for sessions and messages.
 - Thin orchestration: the client coordinates flows without reimplementing core
   server behavior.
-- Streaming-first interaction: the UI updates incrementally as work progresses.
-- Small, intentional state: cache only what improves responsiveness and display.
+- Async everywhere: server communication is callback-driven and must not block
+  editing.
+- Incremental rendering: update the smallest affected region and preserve user
+  point/scroll state.
+- Small, intentional state: cache only what improves responsiveness or display.
 
-* High-Level Architecture
-- Entry and commands
-  - `opencode-run-server` normalizes a directory and registers one connection per
-    directory in a hash table for reuse across commands.
-  - Entry points call into the client layer using the current connection and
-    open or reuse a session buffer.
-- Connection lifecycle
-  - A connection stores base URL, port, directory, and process handles.
-  - Server startup spawns the `opencode serve` process, waits for the ready log
-    line, then performs a health check before marking the connection ready.
-- Transport
-  - All HTTP requests flow through `opencode-request`, which builds URLs from
-    the connection base URL and applies auth headers/timeouts.
-- Streaming
-  - SSE streaming runs in a dedicated subprocess to keep parsing off the
-    Emacs main loop. Two backends are supported:
-    - Preferred: a small JS bridge (`opencode-sse-bridge.js`, run under
-      `bun` or `node`) that connects to `/event`, parses the SSE stream,
-      filters by the set of event types Emacs has registered handlers for,
-      strips known-large fields (e.g. `session.diff`, `summary.diffs`) that
-      the Emacs client never reads, and emits one compact JSON line per
-      event to stdout. Emacs reads complete lines from the bridge's stdout
-      and `json-parse`s each one, with no fragment accumulation needed on
-      the Emacs side.
-    - Fallback: a `curl` process whose output is fed through an in-Emacs
-      incremental SSE parser that handles the `data: …\n\n` framing.
-  - Both backends skip events with no registered Emacs handler — the
-    bridge does not forward them at all, and the curl backend drops their
-    chunks without parsing — to avoid spending time and memory on payloads
-    that would be discarded anyway.
-- Session UI
-  - Session buffers are backed by model structs and maintain message parts,
-    a stable input boundary marker, and header rendering state.  The editable
-    input region runs from that boundary to the end of the buffer, so streaming
-    log updates can insert before it without consuming typed input.
-  - Incremental updates from streaming events mutate messages and re-render
-    affected regions in place while preserving window point and scroll state for
-    users reading in-progress output.
-- Models and caches
-  - Sessions, messages, and parts are modeled with `cl-defstruct` and stored in
-    buffer-local state for rendering.
-  - Agents/providers/commands are cached on the connection for completion and
-    header metadata.
+* Runtime Model
+An OpenCode connection represents one server process for one normalized project
+directory. Connections are registered and reused so commands in the same project
+share a server, caches, and event stream. If the configured port is unavailable,
+the client chooses another free port for that server.
 
-* State and Caching
-- The server owns session data; the client reflects it in Emacs buffers.
-- Session buffers keep the current view state (messages, status, agent, input).
-- Light caches (agents, providers, commands) are maintained for completion and
-  header rendering, and are refreshed as needed.
+Most interactive commands follow the same shape:
 
-* Primary Workflows
-** Start and connect
-- Choose a project directory and start or attach to a server.
-- Validate connectivity and prepare a session buffer.
+1. Resolve a project directory.
+2. Start or reuse the directory's connection.
+3. Make an HTTP request to create, select, or update a session.
+4. Open or reuse a session buffer.
+5. Let the SSE stream drive subsequent UI updates.
 
-** Conversation flow
-- User enters a prompt in the session buffer.
-- The client dispatches the request and streams updates back into the buffer.
-- The buffer maintains a readable log and provides an editable input area.
+There is also a separate one-shot path for running an OpenCode prompt as a CLI
+process. That path does not create a session buffer and is intentionally outside
+the server-backed session lifecycle.
 
-** Session navigation
-- List and open existing sessions from the server.
-- Reuse the most recent session buffers when possible.
+* Layers
+- Entry commands choose directories, manage connection reuse, create or select
+  sessions, and bridge interactive commands into the lower layers.
+- Connection lifecycle owns server process startup, port selection, readiness,
+  health checks, environment variables, shutdown, and connection-scoped caches.
+- HTTP client wrappers centralize request construction, JSON encoding, parsing,
+  auth, timeouts, and directory routing headers.
+- Streaming transport owns the SSE subprocess, event filtering, parsing, and
+  dispatch into registered event handlers.
+- Session domain models normalize server payloads into small Emacs Lisp structs
+  for sessions, messages, message parts, and status.
+- Session buffers own input handling, command classification, completion,
+  selected agent/model/variant, and history loading.
+- Rendering turns buffer-local session state into read-only text with markers,
+  text properties, overlays, fontification, collapsible output, and interactive
+  task/subagent regions.
+- Event handlers translate server events into buffer-local state changes,
+  minibuffer prompts, file reloads, and targeted re-renders.
 
-** Agent and command use
-- Select or cycle available agents for the session.
-- Send slash-style commands when appropriate.
+* State Ownership
+| Owner           | State                                                        |
+|-----------------+--------------------------------------------------------------|
+| OpenCode server | Authoritative sessions, messages, tools, providers, agents   |
+| Connection      | Server process, base URL, directory, SSE process, caches     |
+| Session buffer  | Current session, messages, status, input, selected model data |
+| Global registry | Directory->connection and session->buffer lookup tables      |
+| Rendered text   | Markers, text properties, overlays, and invisibility state    |
 
-** Interactive prompts
-- When the server needs user input (permissions or questions), the client
-  requests a choice in the minibuffer and replies on the user's behalf.
+Connection caches are shared across buffers attached to the same server. Active
+agent, model, and variant selections are buffer-local because each session can
+use different settings. Task/subagent tracking records which parent task tool
+created each child session, so events from a child session can update the task
+block displayed in the parent session buffer.
 
-* Server Interaction Model
-- The client is a thin shell around the server: it issues requests, receives
-  updates, and keeps the UI in sync.
-- Streaming is treated as a first-class path for user feedback and progress.
-- Error handling is user-visible and fail-fast to keep the UI consistent.
+* Session Rendering Invariants
+- The editable input region is always at the end of the buffer.
+- Rendered messages live before the input region and are read-only.
+- Each rendered message has stable start/end markers so streaming updates can
+  replace only that message's region.
+- Rendering must not consume typed input when new output arrives.
+- Window point and scroll position should be preserved for users reading older
+  output; windows already following the bottom should continue following it.
+- Collapsed tool output is keyed by message-part identity so user expansion can
+  survive re-renders.
+- Header-line and retry banner state are derived from session status and message
+  metadata, not from independent persistent UI state.
+
+* Streaming And Event Routing
+SSE is the primary mechanism for keeping buffers current after a request is
+queued. The preferred streaming backend parses and filters events outside Emacs,
+while the fallback backend parses the stream in Emacs. Both paths share the same
+event registry and avoid parsing or retaining events that have no registered
+handler.
+
+Handlers receive the originating connection as metadata. That matters when more
+than one OpenCode server is running: permission replies, question replies, and
+subagent updates must be routed back to the server that produced the event, not
+to an arbitrary live buffer.
+
+Event handlers should do as little as possible: normalize payloads, find the
+right buffer or connection, update local state, and trigger the smallest useful
+render. Minibuffer prompts are deferred out of process filters so stream
+handling does not block on user input.
+
+* Extension Guide
+- To add an HTTP endpoint, add a client wrapper first, then call it from the
+  entry, session, or model layer that owns the user-facing behavior.
+- To add an SSE event, register a handler, route by session ID or originating
+  connection, update buffer-local state, and render only affected UI.
+- To add a rendered tool type, extend tool rendering while preserving read-only
+  properties, message markers, and any interactive text properties.
+- To add input completion, add a completion provider rather than hardcoding the
+  trigger into the mode.
+- To add provider, model, agent, or auth behavior, keep catalogs and expensive
+  lookups connection-scoped; keep the user's active selection buffer-local.
+- To add new global state, first check whether it really belongs on the
+  connection or in the session buffer. Prefer the narrowest owner that works.
+
+* Failure And Recovery
+Server startup fails fast if readiness or health checks do not complete in time.
+Session buffers can reconnect by starting a new server for their session
+directory and updating their buffer-local connection. Process output stays in
+dedicated hidden buffers so UI buffers remain focused on user-facing session
+state. User-visible failures should use clear Emacs messages or errors, and
+processes/buffers should be cleaned up when a connection shuts down.
