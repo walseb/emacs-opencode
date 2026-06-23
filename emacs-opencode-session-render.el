@@ -315,7 +315,12 @@ Only includes string, number, and boolean values."
       (let* ((point (window-point window))
              (window-start (window-start window))
              (window-end (window-end window t))
-             (follow-bottom (and window-end (= window-end (point-max))))
+             (input-start (and (markerp opencode-session--input-start-marker)
+                               (marker-position opencode-session--input-start-marker)))
+             (follow-bottom (and window-end
+                                 (= window-end (point-max))
+                                 input-start
+                                 (<= input-start point)))
              (point-offset (and (<= start point) (<= point end)
                                 (- point start)))
              (window-start-offset (and (<= start window-start)

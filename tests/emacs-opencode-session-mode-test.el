@@ -446,6 +446,66 @@ banner, causing the prompt overlay to render before the banner."
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
+(ert-deftest test-opencode-session-mode/rerender-with-bottom-visible-preserves-message-point ()
+  "A bottom-visible window only follows input when point is in input."
+  (save-window-excursion
+    (let ((buffer (get-buffer-create " *opencode-session-bottom-visible-test*")))
+      (unwind-protect
+          (progn
+            (switch-to-buffer buffer)
+            (erase-buffer)
+            (opencode-session-mode)
+            (opencode-session--ensure-markers)
+            (opencode-session--ensure-input-region)
+            (let ((message (opencode-message-create
+                            :id "m1"
+                            :role "assistant"
+                            :text "before\nneedle old\nafter")))
+              (opencode-session--render-message message)
+              (goto-char (point-min))
+              (search-forward "needle")
+              (goto-char (match-beginning 0))
+              (should (= (window-end (selected-window) t) (point-max)))
+              (setf (opencode-message-text message) "before\nneedle new\nafter")
+              (opencode-session--render-message message)
+              (should (looking-at-p "needle"))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest test-opencode-session-mode/new-message-preserves-message-point ()
+  "Inserting a new message does not force point back to input."
+  (save-window-excursion
+    (let ((buffer (get-buffer-create " *opencode-session-insert-point-test*")))
+      (unwind-protect
+          (progn
+            (switch-to-buffer buffer)
+            (erase-buffer)
+            (opencode-session-mode)
+            (opencode-session--ensure-markers)
+            (opencode-session--ensure-input-region)
+            (let* ((text (concat (mapconcat (lambda (n) (format "line %03d" n))
+                                            (number-sequence 1 80)
+                                            "\n")
+                                 "\nneedle\n"
+                                 (mapconcat (lambda (n) (format "line %03d" n))
+                                            (number-sequence 81 160)
+                                            "\n")))
+                   (first (opencode-message-create :id "m1"
+                                                   :role "assistant"
+                                                   :text text))
+                   (second (opencode-message-create :id "m2"
+                                                    :role "assistant"
+                                                    :text "new response")))
+              (opencode-session--render-message first)
+              (goto-char (point-min))
+              (search-forward "needle")
+              (goto-char (match-beginning 0))
+              (set-window-start (selected-window) (point-min) t)
+              (opencode-session--render-message second)
+              (should (looking-at-p "needle"))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (provide 'emacs-opencode-session-mode-test)
 
 ;;; emacs-opencode-session-mode-test.el ends here
