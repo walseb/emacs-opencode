@@ -382,6 +382,70 @@ banner, causing the prompt overlay to render before the banner."
     (should (null opencode-session--retry-banner-start))
     (should (null opencode-session--retry-banner-end))))
 
+(ert-deftest test-opencode-session-mode/current-input-survives-message-insert ()
+  "Input remains readable when a message is inserted before it."
+  (with-temp-buffer
+    (opencode-session-mode)
+    (opencode-session--ensure-markers)
+    (opencode-session--ensure-input-region)
+    (insert "typed input")
+    (let ((message (opencode-message-create :id "m1" :role "assistant"
+                                            :text "assistant text")))
+      (opencode-session--render-message message)
+      (should (equal (opencode-session--current-input) "typed input"))
+      (should (string-match-p "assistant text"
+                              (buffer-substring-no-properties
+                               (point-min) (marker-position opencode-session--input-start-marker)))))))
+
+(ert-deftest test-opencode-session-mode/clear-input-keeps-log ()
+  "Clearing input deletes only text after the input boundary."
+  (with-temp-buffer
+    (opencode-session-mode)
+    (opencode-session--ensure-markers)
+    (opencode-session--ensure-input-region)
+    (let ((message (opencode-message-create :id "m1" :role "assistant"
+                                            :text "assistant text")))
+      (opencode-session--render-message message))
+    (goto-char (point-max))
+    (insert "typed input")
+    (opencode-session--clear-input)
+    (should (equal (opencode-session--current-input) ""))
+    (should (string-match-p "assistant text"
+                            (buffer-substring-no-properties (point-min) (point-max))))))
+
+(ert-deftest test-opencode-session-mode/streaming-rerender-preserves-message-point ()
+  "Re-rendering a message does not force point back to input."
+  (save-window-excursion
+    (let ((buffer (get-buffer-create " *opencode-session-point-test*")))
+      (unwind-protect
+          (progn
+            (switch-to-buffer buffer)
+            (erase-buffer)
+            (opencode-session-mode)
+            (opencode-session--ensure-markers)
+            (opencode-session--ensure-input-region)
+            (let* ((prefix (mapconcat (lambda (n) (format "line %03d" n))
+                                      (number-sequence 1 80)
+                                      "\n"))
+                   (suffix (mapconcat (lambda (n) (format "line %03d" n))
+                                      (number-sequence 81 160)
+                                      "\n"))
+                   (message (opencode-message-create
+                             :id "m1"
+                             :role "assistant"
+                             :text (concat prefix "\nneedle old\n" suffix))))
+              (opencode-session--render-message message)
+              (goto-char (point-min))
+              (search-forward "needle")
+              (goto-char (match-beginning 0))
+              (set-window-start (selected-window) (point-min) t)
+              (setf (opencode-message-text message)
+                    (concat prefix "\nneedle new\n" suffix))
+              (opencode-session--render-message message)
+              (should (looking-at-p "needle"))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (provide 'emacs-opencode-session-mode-test)
 
 ;;; emacs-opencode-session-mode-test.el ends here

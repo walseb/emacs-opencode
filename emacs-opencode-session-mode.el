@@ -166,8 +166,8 @@ connection, and then call CALLBACK with the new connection."
   (opencode-session--ensure-input-region)
   (let ((inhibit-read-only t))
     (delete-region (marker-position opencode-session--input-start-marker)
-                   (marker-position opencode-session--input-marker))
-    (goto-char (marker-position opencode-session--input-marker))
+                   (point-max))
+    (goto-char (point-max))
     (insert input))
   (opencode-session--goto-input))
 
@@ -295,10 +295,12 @@ connection, and then call CALLBACK with the new connection."
   (unless opencode-session--input-start-marker
     (setq-local opencode-session--input-start-marker (copy-marker (point-max))))
   (unless opencode-session--input-marker
+    ;; Compatibility marker for older call sites.  The authoritative input
+    ;; region is `opencode-session--input-start-marker' through `point-max'.
     (setq-local opencode-session--input-marker (copy-marker (point-max) t))))
 
 (defun opencode-session--ensure-input-region ()
-  "Ensure the input marker sits at the end of the buffer."
+  "Ensure the input prompt and compatibility marker are up to date."
   (let ((inhibit-read-only t))
     (goto-char (point-max))
     (set-marker opencode-session--input-marker (point)))
@@ -323,17 +325,14 @@ connection, and then call CALLBACK with the new connection."
 
 (defun opencode-session--goto-input ()
   "Move point to the input region."
-  (when opencode-session--input-marker
-    (let ((input-pos (marker-position opencode-session--input-marker)))
-      (when (< (point) input-pos)
-        (goto-char input-pos)))))
+  (goto-char (point-max)))
 
 (defun opencode-session--maybe-goto-input ()
   "Move point to input when outside the input markers."
   (if (and opencode-session--input-start-marker
            opencode-session--input-marker)
       (let ((start (marker-position opencode-session--input-start-marker))
-            (end (marker-position opencode-session--input-marker)))
+            (end (point-max)))
         (when (or (< (point) start)
                   (> (point) end))
           (opencode-session--goto-input)))
@@ -341,22 +340,23 @@ connection, and then call CALLBACK with the new connection."
 
 (defun opencode-session--current-input ()
   "Return current input contents as a string."
-  (if opencode-session--input-marker
+  (if opencode-session--input-start-marker
       (buffer-substring-no-properties (marker-position opencode-session--input-start-marker)
-                                      (marker-position opencode-session--input-marker))
+                                      (point-max))
     ""))
 
 (defun opencode-session--clear-input ()
   "Clear the input region."
   (let ((inhibit-read-only t))
     (delete-region (marker-position opencode-session--input-start-marker)
-                   (marker-position opencode-session--input-marker)))
+                   (point-max))
+    (set-marker opencode-session--input-marker (point-max)))
   (opencode-session--goto-input))
 
 (defun opencode-session--restore-input (input)
   "Restore INPUT into the input area."
   (let ((inhibit-read-only t))
-    (goto-char (marker-position opencode-session--input-marker))
+    (goto-char (point-max))
     (insert input))
   (opencode-session--goto-input))
 
@@ -713,7 +713,7 @@ STATUS is an `opencode-status' struct."
   (when (and opencode-session--input-start-marker
              opencode-session--input-marker)
     (let ((start (marker-position opencode-session--input-start-marker))
-          (end (marker-position opencode-session--input-marker))
+          (end (point-max))
           (pos (point)))
       (and (<= start pos) (<= pos end)))))
 
@@ -734,7 +734,7 @@ Returns a cons cell (START . END) or nil when the input is not a slash command."
   (when (and opencode-session--input-start-marker
              opencode-session--input-marker)
     (let ((start (marker-position opencode-session--input-start-marker))
-          (end (marker-position opencode-session--input-marker))
+          (end (point-max))
           (pos (point)))
       (when (and (<= start pos) (<= pos end))
         (save-excursion
@@ -793,7 +793,7 @@ preceded by whitespace or the start of the input region."
   (when (and opencode-session--input-start-marker
              opencode-session--input-marker)
     (let ((input-start (marker-position opencode-session--input-start-marker))
-          (input-end (marker-position opencode-session--input-marker))
+          (input-end (point-max))
           (pos (point)))
       (when (and (<= input-start pos) (<= pos input-end))
         (save-excursion

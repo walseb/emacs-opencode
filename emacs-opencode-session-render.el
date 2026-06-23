@@ -288,16 +288,74 @@ Only includes string, number, and boolean values."
 
 (defun opencode-session--replace-message-region (start end text face message)
   "Replace text between START and END with TEXT, FACE, and MESSAGE."
-  (let ((inhibit-read-only t))
+  (let* ((old-start (marker-position start))
+         (old-end (marker-position end))
+         (window-states
+          (opencode-session--message-render-window-states old-start old-end))
+         (inhibit-read-only t)
+         new-start
+         new-end)
     (save-excursion
-      (goto-char (marker-position start))
-      (delete-region (marker-position start) (marker-position end))
-      (let ((new-start (point)))
-        (insert text)
-        (let ((new-end (point)))
-          (set-marker start new-start)
-          (set-marker end new-end)
-          (opencode-session--apply-message-properties new-start new-end face message))))))
+      (goto-char old-start)
+      (delete-region old-start old-end)
+      (setq new-start (point))
+      (insert text)
+      (setq new-end (point))
+      (set-marker start new-start)
+      (set-marker end new-end)
+      (opencode-session--apply-message-properties new-start new-end face message))
+    (opencode-session--restore-render-window-states
+     window-states new-start new-end)))
+
+(defun opencode-session--message-render-window-states (start end)
+  "Return window state to preserve while replacing START to END."
+  (let ((buffer (current-buffer))
+        states)
+    (dolist (window (get-buffer-window-list buffer nil t))
+      (let* ((point (window-point window))
+             (window-start (window-start window))
+             (window-end (window-end window t))
+             (follow-bottom (and window-end (= window-end (point-max))))
+             (point-offset (and (<= start point) (<= point end)
+                                (- point start)))
+             (window-start-offset (and (<= start window-start)
+                                       (<= window-start end)
+                                       (- window-start start))))
+        (push (list :window window
+                    :point-marker (copy-marker point)
+                    :point-offset point-offset
+                    :window-start-marker (copy-marker window-start)
+                    :window-start-offset window-start-offset
+                    :follow-bottom follow-bottom)
+              states)))
+    states))
+
+(defun opencode-session--restore-render-window-states (states new-start new-end)
+  "Restore window STATES after replacing text with NEW-START and NEW-END."
+  (dolist (state states)
+    (let ((window (plist-get state :window)))
+      (when (window-live-p window)
+        (let* ((follow-bottom (plist-get state :follow-bottom))
+               (point-offset (plist-get state :point-offset))
+               (point-marker (plist-get state :point-marker))
+               (window-start-offset (plist-get state :window-start-offset))
+               (window-start-marker (plist-get state :window-start-marker))
+               (restored-point
+                (if point-offset
+                    (min new-end (+ new-start point-offset))
+                  (marker-position point-marker)))
+               (restored-start
+                (if window-start-offset
+                    (min new-end (+ new-start window-start-offset))
+                  (marker-position window-start-marker))))
+          (if follow-bottom
+              (set-window-point window (point-max))
+            (when restored-start
+              (set-window-start window restored-start t))
+            (when restored-point
+              (set-window-point window restored-point)))
+          (set-marker point-marker nil)
+          (set-marker window-start-marker nil))))))
 
 (declare-function opencode-session--ensure-input-prompt "emacs-opencode-session-mode")
 
@@ -318,7 +376,7 @@ prompt."
           (setf (opencode-message-end-marker message) (copy-marker end)))
         (insert "\n")
         (set-marker opencode-session--input-start-marker (point))
-        (set-marker opencode-session--input-marker (point))
+        (set-marker opencode-session--input-marker (point-max))
         (opencode-session--ensure-input-prompt)
         (opencode-session--apply-message-properties start (point) face message))))
   (opencode-session--render-retry-banner))
@@ -381,9 +439,8 @@ with `opencode-session-error-face' so it stands out as an error."
 
 Always clears any existing banner first and re-inserts at the
 current `opencode-session--input-start-marker' position.  Pushes
-`opencode-session--input-start-marker' (and the input marker, if
-needed) past the banner and re-anchors the prompt overlay so the
-banner sits above the prompt.
+`opencode-session--input-start-marker' past the banner and
+re-anchors the prompt overlay so the banner sits above the prompt.
 
 TEXT does not include a trailing newline; one is added so the
 banner occupies its own line."
@@ -408,14 +465,11 @@ banner occupies its own line."
                       (copy-marker insert-start))
           (setq-local opencode-session--retry-banner-end
                       (copy-marker insert-end))
-          ;; Push the input start marker past the banner so the input
-          ;; region remains intact and the prompt overlay anchors
-          ;; below the banner.
+          ;; Push only the input boundary past the banner.  User input
+          ;; remains the text from that boundary through `point-max'.
           (set-marker opencode-session--input-start-marker insert-end)
-          (when (and (markerp opencode-session--input-marker)
-                     (< (marker-position opencode-session--input-marker)
-                        insert-end))
-            (set-marker opencode-session--input-marker insert-end))
+          (when (markerp opencode-session--input-marker)
+            (set-marker opencode-session--input-marker (point-max)))
           (opencode-session--ensure-input-prompt))))))
 
 (defun opencode-session--apply-message-properties (start end _face message)

@@ -12,7 +12,7 @@ The TUI prompts the user via a confirm dialog and runs an upgrade.
 At minimum we should =message= the user; eventually a customizable
 hook so users can wire it to whatever update flow they prefer.
 
-* TODO Fix issue where you can't scroll around when a response is streaming in
+* DONE Fix issue where you can't scroll around when a response is streaming in
 
 * TODO Handle emphasis (=**thing**=) in font-lock
 

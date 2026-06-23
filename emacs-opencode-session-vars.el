@@ -30,7 +30,10 @@ Each value is a cons (PARENT-SESSION-ID . TASK-PART-ID).")
   "Marker indicating the start of the input region.")
 
 (defvar-local opencode-session--input-marker nil
-  "Marker indicating the end of the input region.")
+  "Compatibility marker tracking the end of the input region.
+
+The authoritative input region is from
+`opencode-session--input-start-marker' through `point-max'.")
 
 (defvar-local opencode-session--agent nil
   "Selected agent name for the current session buffer.")

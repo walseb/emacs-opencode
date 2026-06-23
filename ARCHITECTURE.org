@@ -48,9 +48,12 @@ amount of local state needed for a smooth editing experience.
     that would be discarded anyway.
 - Session UI
   - Session buffers are backed by model structs and maintain message parts,
-    markers for the input region, and header rendering state.
+    a stable input boundary marker, and header rendering state.  The editable
+    input region runs from that boundary to the end of the buffer, so streaming
+    log updates can insert before it without consuming typed input.
   - Incremental updates from streaming events mutate messages and re-render
-    affected regions in place.
+    affected regions in place while preserving window point and scroll state for
+    users reading in-progress output.
 - Models and caches
   - Sessions, messages, and parts are modeled with `cl-defstruct` and stored in
     buffer-local state for rendering.
