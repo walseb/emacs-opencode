@@ -178,7 +178,7 @@ Returns the payload portion, or STR unchanged if no prefix is found."
 (defun opencode-sse--extract-event-type (data)
   "Extract the event type from raw SSE DATA without JSON parsing.
 Returns the type string, or nil if it cannot be extracted."
-  (when (string-match "\\`{\"type\":\"\\([^\"]+\\)\"" data)
+  (when (string-match "\"type\":\"\\([^\"]+\\)\"" data)
     (match-string 1 data)))
 
 (defun opencode-sse--finalize-event (connection fragments)

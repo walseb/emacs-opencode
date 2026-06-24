@@ -16,9 +16,16 @@
   (should (null (opencode-sse--extract-event-type "{\"data\":{}}"))))
 
 (ert-deftest test-opencode-sse/extract-event-type-not-first ()
-  "Return nil when type is not the first key."
-  (should (null (opencode-sse--extract-event-type
-                 "{\"data\":{},\"type\":\"foo\"}"))))
+  "Extract type when it is not the first key."
+  (should (equal (opencode-sse--extract-event-type
+                  "{\"data\":{},\"type\":\"foo\"}")
+                 "foo")))
+
+(ert-deftest test-opencode-sse/extract-event-type-after-id ()
+  "Extract type from OpenCode events that include id first."
+  (should (equal (opencode-sse--extract-event-type
+                  "{\"id\":\"evt_1\",\"type\":\"server.connected\",\"properties\":{}}")
+                 "server.connected")))
 
 (ert-deftest test-opencode-sse/extract-event-type-empty-string ()
   "Return nil for empty input."
